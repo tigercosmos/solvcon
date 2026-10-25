@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OpenDRIVE>
+  <header revMajor="1" revMinor="8" name="junction" version="1.0"
+          date="2026-10-26" north="0" south="0" east="0" west="0"
+          vendor="odrcore tests"/>
+  <road name="West" length="100.0" id="1" junction="-1" rule="RHT">
+    <link>
+      <successor elementType="junction" elementId="100"/>
+    </link>
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="100.0">
+        <line/>
+      </geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0.0">
+        <left>
+          <lane id="1" type="driving" level="false">
+            <width sOffset="0.0" a="3.5" b="0.0" c="0.0" d="0.0"/>
+            <roadMark sOffset="0.0" type="solid" color="white" width="0.12"/>
+          </lane>
+        </left>
+        <center>
+          <lane id="0" type="none" level="false">
+            <roadMark sOffset="0.0" type="solid" color="yellow" width="0.12"/>
+          </lane>
+        </center>
+        <right>
+          <lane id="-1" type="driving" level="false">
+            <width sOffset="0.0" a="3.5" b="0.0" c="0.0" d="0.0"/>
+            <roadMark sOffset="0.0" type="solid" color="white" width="0.12"/>
+          </lane>
+        </right>
+      </laneSection>
+    </lanes>
+    <signals>
+      <signal s="95.0" t="-5.0" id="tl1" name="light" dynamic="yes"
+              orientation="+" zOffset="4.5" country="DE" type="1000001"
+              subtype="-1" hOffset="0.0">
+        <validity fromLane="-1" toLane="-1"/>
+      </signal>
+    </signals>
+  </road>
+  <road name="East" length="100.0" id="2" junction="-1" rule="RHT">
+    <link>
+      <predecessor elementType="junction" elementId="100"/>
+    </link>
+    <planView>
+      <geometry s="0.0" x="120.0" y="0.0" hdg="0.0" length="100.0">
+        <line/>
+      </geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0.0">
+        <left>
+          <lane id="1" type="driving" level="false">
+            <width sOffset="0.0" a="3.5" b="0.0" c="0.0" d="0.0"/>
+            <roadMark sOffset="0.0" type="solid" color="white" width="0.12"/>
+          </lane>
+        </left>
+        <center>
+          <lane id="0" type="none" level="false">
+            <roadMark sOffset="0.0" type="solid" color="yellow" width="0.12"/>
+          </lane>
+        </center>
+        <right>
+          <lane id="-1" type="driving" level="false">
+            <width sOffset="0.0" a="3.5" b="0.0" c="0.0" d="0.0"/>
+            <roadMark sOffset="0.0" type="solid" color="white" width="0.12"/>
+          </lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+  <road name="W-E" length="20.0" id="3" junction="100" rule="RHT">
+    <link>
+      <predecessor elementType="road" elementId="1" contactPoint="end"/>
+      <successor elementType="road" elementId="2" contactPoint="start"/>
+    </link>
+    <planView>
+      <geometry s="0.0" x="100.0" y="0.0" hdg="0.0" length="20.0">
+        <line/>
+      </geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0.0">
+        <center>
+          <lane id="0" type="none" level="false">
+            <roadMark sOffset="0.0" type="none"/>
+          </lane>
+        </center>
+        <right>
+          <lane id="-1" type="driving" level="false">
+            <link>
+              <predecessor id="-1"/>
+              <successor id="-1"/>
+            </link>
+            <width sOffset="0.0" a="3.5" b="0.0" c="0.0" d="0.0"/>
+            <roadMark sOffset="0.0" type="none"/>
+          </lane>
+        </right>
+      </laneSection>
+    </lanes>
+    <signals>
+      <signalReference s="1.0" t="-5.0" id="tl1" orientation="+">
+        <validity fromLane="-1" toLane="-1"/>
+      </signalReference>
+    </signals>
+  </road>
+  <road name="E-W" length="20.0" id="4" junction="100" rule="RHT">
+    <link>
+      <predecessor elementType="road" elementId="2" contactPoint="start"/>
+      <successor elementType="road" elementId="1" contactPoint="end"/>
+    </link>
+    <planView>
+      <geometry s="0.0" x="120.0" y="0.0" hdg="3.141592653589793"
+                length="20.0">
+        <line/>
+      </geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0.0">
+        <center>
+          <lane id="0" type="none" level="false">
+            <roadMark sOffset="0.0" type="none"/>
+          </lane>
+        </center>
+        <right>
+          <lane id="-1" type="driving" level="false">
+            <link>
+              <predecessor id="1"/>
+              <successor id="1"/>
+            </link>
+            <width sOffset="0.0" a="3.5" b="0.0" c="0.0" d="0.0"/>
+            <roadMark sOffset="0.0" type="none"/>
+          </lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+  <junction id="100" name="X" type="default">
+    <connection id="0" incomingRoad="1" connectingRoad="3"
+                contactPoint="start">
+      <laneLink from="-1" to="-1"/>
+    </connection>
+    <connection id="1" incomingRoad="2" connectingRoad="4"
+                contactPoint="start">
+      <laneLink from="1" to="-1"/>
+    </connection>
+    <priority high="3" low="4"/>
+  </junction>
+  <junctionGroup id="g1" name="grp" type="roundabout"/>
+</OpenDRIVE>
