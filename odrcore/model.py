@@ -23,6 +23,7 @@ from .geom import PiecewisePoly3, RefLine
 
 if TYPE_CHECKING:
     from .topology import LinkIndex
+    from .view import LaneletView
 
 LaneId = tuple[str, int, int]
 """``(road_id, section_index, odr_lane_id)``."""
@@ -379,7 +380,11 @@ class Header:
 class Map:
     """The Lanelet2 LaneletMap: dict layers keyed by id. ``roads`` and
     ``junctions`` own the structure; ``lanes``, ``boundaries``, ``signals``
-    and ``regulations`` index into it."""
+    and ``regulations`` index into it.
+
+    Edits happen on this OpenDRIVE form only. The link index and the
+    sampled Lanelet2 form are derived from it on demand and cached until
+    ``reindex()``, which must follow an edit."""
 
     header: Header = field(default_factory=Header)
     frame: Frame = field(default_factory=Frame)
@@ -391,9 +396,12 @@ class Map:
     regulations: dict[str, Regulation] = field(default_factory=dict)
     attrs: Attrs = field(default_factory=dict)
     _links: Optional['LinkIndex'] = field(default=None, repr=False)
+    _lanelet2: dict[tuple[float, float], 'LaneletView'] = field(
+        default_factory=dict, repr=False)
 
     def reindex(self) -> None:
-        """Rebuild the lane and boundary layers from the roads."""
+        """Rebuild the lane and boundary layers from the roads and drop
+        the derived caches."""
         self.lanes.clear()
         self.boundaries.clear()
         for road in self.roads.values():
@@ -404,6 +412,7 @@ class Map:
                 for lane in sec.lanes():
                     self.lanes[lane.id] = lane
         self._links = None
+        self._lanelet2.clear()
 
     @property
     def links(self) -> 'LinkIndex':
@@ -424,6 +433,26 @@ class Map:
     def validate(self) -> list[str]:
         from .topology import validate
         return validate(self)
+
+    def lanelet2(self, spacing: float = 2.0,
+                 seam_tol: float = 1e-6) -> 'LaneletView':
+        """The Lanelet2 form sampled every ``spacing`` meters at most,
+        cached per sampling setting."""
+        key = (float(spacing), float(seam_tol))
+        found = self._lanelet2.get(key)
+        if found is None:
+            from .view import generate
+            found = generate(self, spacing, seam_tol)
+            self._lanelet2[key] = found
+        return found
+
+    def route(self, source: Lane, target: Lane, participant: str,
+              lane_changes: bool = True) -> list[Lane]:
+        """Fewest-lane path usable by ``participant``, or ``[]``."""
+        ll2 = self.lanelet2()
+        path = ll2.route(ll2.by_lane[source.id], ll2.by_lane[target.id],
+                         participant, lane_changes)
+        return [self.lanes[ll2.lanelets[i].source] for i in path]
 
 
 def boundary_id(road_id: str, section_index: int, odr_lane_id: int) -> str:
