@@ -46,6 +46,7 @@ from .geom import PiecewisePoly3, RefLine
 
 if TYPE_CHECKING:
     from .topology import LinkIndex
+    from .view import LaneletView
 
 LaneId = tuple[str, int, int]
 """``(road_id, section_index, odr_lane_id)``."""
@@ -374,7 +375,11 @@ class Map:
     """The Lanelet2 LaneletMap: dict layers keyed by id. ``roads`` and
     ``junctions`` own the structure; ``lanes``, ``boundaries``, ``signals``
     and ``regulations`` index into it. ``reindex()`` rebuilds the index
-    layers from the roads and drops the cached link index."""
+    layers from the roads and drops the derived caches.
+
+    Edits happen on this OpenDRIVE form only. The link index and the
+    sampled Lanelet2 form are derived on demand and cached until
+    ``reindex()``, which must follow an edit."""
 
     header: Header = field(default_factory=Header)
     frame: Frame = field(default_factory=Frame)
@@ -386,6 +391,8 @@ class Map:
     regulations: dict[str, Regulation] = field(default_factory=dict)
     attrs: Attrs = field(default_factory=dict)
     _links: Optional['LinkIndex'] = field(default=None, repr=False)
+    _lanelet2: dict[tuple[float, float], 'LaneletView'] = field(
+        default_factory=dict, repr=False)
 
     def reindex(self) -> None:
         self.lanes.clear()
@@ -397,6 +404,7 @@ class Map:
                 for lane in sec.lanes():
                     self.lanes[lane.id] = lane
         self._links = None
+        self._lanelet2.clear()
 
     @property
     def links(self) -> 'LinkIndex':
@@ -405,6 +413,17 @@ class Map:
             from .topology import LinkIndex
             self._links = LinkIndex(self)
         return self._links
+
+    def lanelet2(self, spacing: float = 2.0,
+                 seam_tol: float = 1e-6) -> 'LaneletView':
+        """The Lanelet2 form sampled every ``spacing`` meters at most,
+        cached per sampling setting."""
+        raise NotImplementedError
+
+    def route(self, source: Lane, target: Lane, participant: str,
+              lane_changes: bool = True) -> list[Lane]:
+        """Fewest-lane path usable by ``participant``, or ``[]``."""
+        raise NotImplementedError
 
 
 def boundary_id(road_id: str, section_index: int, odr_lane_id: int) -> str:
