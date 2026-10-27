@@ -13,6 +13,14 @@ view sampling are reduced to signatures and docstrings.
 | `model.py` | Entities and the `Map` container. The core of the design. |
 | `topology.py` | Derived `Link` and the `LinkIndex` interface. |
 | `view.py` | Disposable Lanelet2 view entities and `LaneletView`. |
+| `osm.py` | Lanelet2 OSM writer interface. |
+
+Both formats are supported for querying and output. `Map.lanelet2()`
+returns the cached Lanelet2 form, `Map.route()` routes between model
+lanes, and `osm.dump()` writes a Lanelet2 OSM file next to the `.xodr`
+writer. Edits happen on the OpenDRIVE form only, and there is no Lanelet2
+reader: sampled linestrings cannot become the analytic model without
+fitting, which would break the lossless round trip.
 
 Dropped entirely: `parse.py`, `serialize.py`, `compare.py`, `_xml.py`,
 tests and fixtures.
@@ -60,8 +68,9 @@ Ids: `Lane.id` is `(road_id, section_index, odr_lane_id)`. A boundary is
 - `Regulation.roles` hold model objects, not ids, so renumbering cannot
   break them.
 - `Map.roads` and `Map.junctions` own; `Map.lanes`, `.boundaries`,
-  `.signals` are rebuilt by `reindex()`. `Map.links` is derived, cached,
-  never serialized.
+  `.signals` are rebuilt by `reindex()`. `Map.links` and
+  `Map.lanelet2()` are derived and cached until `reindex()`; neither is
+  stored in the `.xodr`.
 - View ids are 63-bit hashes of model keys, stable across load/dump/load.
 
 ## Open decisions (carried over)
@@ -74,3 +83,6 @@ Ids: `Lane.id` is `(road_id, section_index, odr_lane_id)`. A boundary is
 - Stop lines, `right_of_way` and `yield` roles are representable but never
   filled by import.
 - `LinkIndex.conflicting` is a stub.
+- The OSM writer ignores the header `<offset>` and treats the model plane
+  as a local tangent plane, which matches a transverse Mercator
+  geoReference near the origin only.
