@@ -6,6 +6,12 @@ attributes, regulatory elements and a routing graph. The `.xodr` file is the
 storage format. Lanelet2 is a view over the model; nothing in the model is
 stored in Lanelet2 terms.
 
+Both formats are supported for querying and output: `dump` writes `.xodr`
+and `osm.dump` writes a Lanelet2 OSM file. Edits happen on the OpenDRIVE
+form only. There is no Lanelet2 reader, because sampled linestrings cannot
+be turned back into the analytic model without fitting, which would break
+the lossless round trip.
+
 ## Layers
 
 | Module | Content |
@@ -17,6 +23,7 @@ stored in Lanelet2 terms.
 | `topology.py` | Derived `Link` index, travel-direction accessors, `validate`. |
 | `compare.py` | Canonical form and `equivalent(a, b)` for round-trip checks. |
 | `view.py` | Disposable Lanelet2 view: sampled linestrings, lanelets, routing. |
+| `osm.py` | `dump(map, path)`, `dumps`: the Lanelet2 view as a Lanelet2 OSM file. |
 | `_xml.py` | lxml with a stdlib ElementTree fallback, verbatim sidecars. |
 
 ## Rules the model follows
@@ -144,7 +151,7 @@ Ignored on parse and never breaking it: `lateralProfile/shape`, `surface`,
 `height`, `material`, `rule`, `<include>`. Road-level ones are kept verbatim
 in the sidecar; top-level ones are only recorded by tag name.
 
-Not provided: a Lanelet2 file writer (OSM), routing beyond the view's
+Not provided: a Lanelet2 file reader, routing beyond the view's
 breadth-first `route`. Sampling exists only in `view.py`; the model stays
 analytic.
 
@@ -189,6 +196,33 @@ built from the map and never written back. Its ideas are ported from the
   as Lanelet2 expects. Other roles map lanes to lanelets and boundaries to
   linestrings.
 
+## Lanelet2 access on the map
+
+`Map.lanelet2(spacing, seam_tol)` returns the view and caches it per
+sampling setting, like `Map.links`. `Map.route(source, target,
+participant)` takes and returns model lanes. `reindex()` drops both caches
+and must follow an edit, so the derived forms never go stale silently.
+
+## Lanelet2 OSM output (`osm.py`)
+
+- **Ways.** Each view linestring becomes one way oriented along s. The
+  Lanelet2 loader runs `geometry::align` on the two bounds of a lanelet and
+  inverts a bound whose partner lies on the wrong side, so lanelets of
+  opposite travel direction share one way. A test ports `align` and checks
+  that the aligned left bound runs in the travel direction of every lane.
+- **Coordinates.** Model x, y, z are east, north and up of a local tangent
+  plane at the origin, which is `+lat_0`/`+lon_0` of the geoReference or
+  `(0, 0)`. `lat`, `lon` and `ele` are the exact WGS84 inverse, so
+  `LocalCartesianProjector(Origin(lat, lon))` gives back x, y, z. Nodes
+  also carry `local_x` and `local_y`.
+- **Signals.** Lanelet2 signs and lights refer to a linestring, so each
+  signal becomes a two-node way across the road, `width` wide (0.6 m when
+  absent), at the bottom of the signal, with its `height`.
+- **Participants.** Every lanelet gets `participant:<name>=yes|no` for each
+  Lanelet2 participant that an OpenDRIVE road user maps to, so Lanelet2
+  does not fall back to its subtype defaults. `odr:participants` keeps the
+  full OpenDRIVE set, including `delivery`, which has no Lanelet2 name.
+
 ## Default decisions (open)
 
 - **open** Road marks stay piecewise on the boundary, and the view does not
@@ -203,6 +237,12 @@ built from the map and never written back. Its ideas are ported from the
 - **open** A participant must be allowed along the whole lane section.
   Access that changes partway through the section is the most restrictive
   over it.
+- **open** The OSM writer does not apply the header `<offset>`, and it
+  treats the model plane as a local tangent plane even when the
+  geoReference is a transverse Mercator projection. The two agree near the
+  origin only.
+- **open** A lane with zero width over its whole section gives Lanelet2's
+  `align` no side to test, so its bounds may load inverted.
 - **open** Stop lines are not imported. `kind="stop_line"` and the `ref_line`
   role exist in `Regulation` only.
 - **open** `right_of_way` and `yield` roles are representable but left empty
