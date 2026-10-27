@@ -16,6 +16,7 @@ stored in Lanelet2 terms.
 | `serialize.py` | `dump(map, path, lane_geometry="width"|"border")`, `dumps`. |
 | `topology.py` | Derived `Link` index, travel-direction accessors, `validate`. |
 | `compare.py` | Canonical form and `equivalent(a, b)` for round-trip checks. |
+| `view.py` | Disposable Lanelet2 view: sampled linestrings, lanelets, routing. |
 | `_xml.py` | lxml with a stdlib ElementTree fallback, verbatim sidecars. |
 
 ## Rules the model follows
@@ -143,13 +144,65 @@ Ignored on parse and never breaking it: `lateralProfile/shape`, `surface`,
 `height`, `material`, `rule`, `<include>`. Road-level ones are kept verbatim
 in the sidecar; top-level ones are only recorded by tag name.
 
-Not provided: a Lanelet2 exporter, any polyline sampling, routing
-algorithms.
+Not provided: a Lanelet2 file writer (OSM), routing beyond the view's
+breadth-first `route`. Sampling exists only in `view.py`; the model stays
+analytic.
+
+## Lanelet2 view (`view.py`)
+
+`view.generate(map, spacing=2.0, seam_tol=1e-6)` returns a `LaneletView`
+built from the map and never written back. Its ideas are ported from the
+`odr_core` prototype's view; its core model is not.
+
+- **Lanelets.** One per lane per lane section. Bounds come from
+  `Lane.left_bound` and `Lane.right_bound`. A `both` lane yields one lanelet
+  tagged `one_way=no`.
+- **Shared linestrings.** Each section `Boundary` becomes one `LineString`
+  oriented along s. A lanelet that travels against s holds it through an
+  `OrientedLine` with `inverted=True`, so the lanes on both sides of a
+  boundary share one linestring.
+- **Seams.** At a section seam, boundary ends whose t differs by at most
+  `seam_tol` share one `Point`. A discontinuous width keeps two points.
+  Road ends are not merged, even where two roads meet.
+- **Sampling.** A boundary is sampled on a uniform grid no coarser than
+  `spacing`, plus every s where its offset, the plan view, the elevation,
+  the superelevation or its road mark changes formula. Each linestring keeps
+  its `stations`.
+- **Ids.** 63-bit blake2b hashes of a key made of model ids, for example
+  `("lanelet", road, section, lane)` or `("linestring", boundary id)`. The
+  same map gives the same ids after a load, dump and load. A collision
+  raises `ValueError`.
+- **Line tags.** The first mark of a boundary sets `type` and `subtype`.
+  Double lines are mirrored on the left of the reference line, because
+  OpenDRIVE lists their parts from inner to outer lane.
+- **Participants.** Lane type gives a default set of OpenDRIVE
+  `e_accessRestrictionType` users. `<access>` rules narrow it, and a user
+  must be allowed by every rule set in the section.
+- **Routing.** Successor edges come from `LinkIndex.successors`. Left and
+  right lane-change edges join same-direction neighbors whose shared
+  boundary marks permit the crossing. Each edge carries the participants
+  allowed on both lanelets, and `route(src, dst, participant)` searches
+  only edges that participant may use.
+- **Regulations.** Each model `Regulation` becomes a `RegulatoryElement`.
+  Its anchor signal becomes a point in the Lanelet2 `refers` role. The
+  model's `refers` lanes receive the regulation instead of holding a role,
+  as Lanelet2 expects. Other roles map lanes to lanelets and boundaries to
+  linestrings.
 
 ## Default decisions (open)
 
-- **open** Road marks stay piecewise on the boundary; lanes are not split at
-  mark changes on import. A later Lanelet2 view layer does the splitting.
+- **open** Road marks stay piecewise on the boundary, and the view does not
+  split lanelets at mark changes. A boundary's line tags come from its first
+  mark. `odr:mark_segments` counts the marks, and every mark start is a
+  sample station, so a later split can cut there.
+- **open** A missing `laneChange` permits crossing in both directions, as
+  the spec defaults. This holds for a solid line too, so real data may need
+  an explicit `laneChange="none"`.
+- **open** A `both` lanelet is routed only along s, like the link index.
+- **open** Section seams share points; road-to-road joins do not.
+- **open** A participant must be allowed along the whole lane section.
+  Access that changes partway through the section is the most restrictive
+  over it.
 - **open** Stop lines are not imported. `kind="stop_line"` and the `ref_line`
   role exist in `Regulation` only.
 - **open** `right_of_way` and `yield` roles are representable but left empty
