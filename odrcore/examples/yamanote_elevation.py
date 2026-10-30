@@ -39,11 +39,12 @@ import numpy as np
 
 import odrcore
 from odrcore.geom import PiecewisePoly3
-from odrcore.model import Map, Road
+from odrcore.model import Road
 from odrcore.osm import LocalTangentPlane, origin_of
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from yamanote import TRACKS, fetch  # noqa: E402
+from _osmroad import fetch, loop_chain  # noqa: E402
+from yamanote import QUERY, TRACKS  # noqa: E402
 
 TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/{src}/{z}/{x}/{y}.txt'
 SOURCES = ('dem5a', 'dem5b', 'dem10b')
@@ -113,16 +114,6 @@ class Tiles:
         top = corners[0] * (1.0 - u) + corners[1] * u
         bottom = corners[2] * (1.0 - u) + corners[3] * u
         return top * (1.0 - v) + bottom * v
-
-
-def loop_chain(m: Map, label: str) -> list[Road]:
-    first = next(r for r in m.roads.values() if r.name.startswith(label))
-    chain, road = [], first
-    while True:
-        chain.append(road)
-        road = m.roads[road.successor.element_id]
-        if road is first:
-            return chain
 
 
 def structure_offset(tags: dict) -> float:
@@ -221,7 +212,7 @@ def main(argv: list[str]) -> int:
     if len(argv) > 3:
         data = json.loads(pathlib.Path(argv[3]).read_text('utf-8'))
     else:
-        data = fetch()
+        data = fetch(QUERY)
     tags = {str(e['id']): e.get('tags', {})
             for e in data['elements'] if e['type'] == 'way'}
 

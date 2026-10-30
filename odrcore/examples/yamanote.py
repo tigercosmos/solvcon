@@ -28,42 +28,29 @@ Without OVERPASS.json the relations are fetched from the Overpass API.
 """
 
 import json
-import math
 import pathlib
 import sys
-import urllib.parse
-import urllib.request
 from xml.sax.saxutils import quoteattr
 
 import numpy as np
 
 import odrcore
-from odrcore.geom import ParamPoly3, PiecewisePoly3
+from odrcore.geom import PiecewisePoly3
 from odrcore.model import (Boundary, Frame, Header, Lane, LaneLink,
                            LaneSection, Map, Road, RoadLink, SpeedLimit,
                            boundary_id)
 from odrcore.osm import LocalTangentPlane
 
+from _osmroad import fetch, hermite, structure, tangents, thin
+
 OUTER, INNER = 1972920, 1972960
 TRACKS = ((OUTER, 'Outer'), (INNER, 'Inner'))
-OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
 QUERY = (f'[out:json][timeout:120];rel(id:{OUTER},{INNER})->.r;.r out body;'
          'way(r.r:"");out body geom;node(r.r:"stop");out;')
 LANE_WIDTH = 3.0
-MIN_SPACING = 2.0
 DEFAULT_SPEED = 90.0
 ATTRIBUTION = ('(c) OpenStreetMap contributors, ODbL 1.0, relations '
                f'{OUTER} and {INNER}')
-
-_GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(16)
-
-
-def fetch() -> dict:
-    body = urllib.parse.urlencode({'data': QUERY}).encode()
-    req = urllib.request.Request(OVERPASS_URL, body,
-                                 {'User-Agent': 'solvcon-odrcore'})
-    with urllib.request.urlopen(req, timeout=180) as resp:
-        return json.load(resp)
 
 
 def chain(rel: dict, ways: dict) -> list[tuple[dict, list]]:
@@ -87,62 +74,6 @@ def chain(rel: dict, ways: dict) -> list[tuple[dict, list]]:
     if out[0][1][0][0] != out[-1][1][-1][0]:
         raise ValueError(f'relation {rel["id"]} is not closed')
     return out
-
-
-def thin(xy: np.ndarray, keep: set[int]) -> list[int]:
-    """Indices of the points kept: every index in ``keep`` and the interior
-    points at least ``MIN_SPACING`` from the previous kept one."""
-    idx = [0]
-    for i in range(1, len(xy)):
-        if i in keep or np.hypot(*(xy[i] - xy[idx[-1]])) >= MIN_SPACING:
-            idx.append(i)
-    return idx
-
-
-def tangents(xy: np.ndarray) -> np.ndarray:
-    prev, nxt = np.roll(xy, 1, axis=0), np.roll(xy, -1, axis=0)
-    h0 = np.hypot(*(xy - prev).T)[:, None]
-    h1 = np.hypot(*(nxt - xy).T)[:, None]
-    t = (h1 * (xy - prev) / h0 + h0 * (nxt - xy) / h1) / (h0 + h1)
-    return t / np.hypot(*t.T)[:, None]
-
-
-def hermite(s0: float, p0, p1, t0, t1) -> ParamPoly3:
-    """Normalized paramPoly3 from ``p0`` to ``p1`` leaving along unit
-    tangent ``t0`` and arriving along ``t1``, both scaled by the chord."""
-    hdg = math.atan2(t0[1], t0[0])
-    ch, sh = math.cos(hdg), math.sin(hdg)
-    chord = float(np.hypot(*(p1 - p0)))
-
-    def local(v):
-        return np.array([v[0] * ch + v[1] * sh, -v[0] * sh + v[1] * ch])
-
-    q1, m0, m1 = local(p1 - p0), local(t0) * chord, local(t1) * chord
-    b, c, d = m0, 3.0 * q1 - 2.0 * m0 - m1, -2.0 * q1 + m0 + m1
-    p = 0.5 * (_GL_NODES + 1.0)
-    du = b[0] + p * (2.0 * c[0] + 3.0 * d[0] * p)
-    dv = b[1] + p * (2.0 * c[1] + 3.0 * d[1] * p)
-    length = 0.5 * float(np.sum(_GL_WEIGHTS * np.hypot(du, dv)))
-    return ParamPoly3(s0, length, float(p0[0]), float(p0[1]), hdg,
-                      0.0, float(b[0]), float(c[0]), float(d[0]),
-                      0.0, float(b[1]), float(c[1]), float(d[1]),
-                      p_range='normalized')
-
-
-def structure(way: dict, length: float) -> str:
-    tags = way['tags']
-    if tags.get('tunnel'):
-        kind = 'tunnel'
-        typ = ('underpass' if tags['tunnel'] == 'building_passage'
-               else 'standard')
-    elif tags.get('bridge'):
-        kind, typ = 'bridge', 'concrete'
-    else:
-        return ''
-    name = tags.get(f'{kind}:name', '')
-    return (f'<objects><{kind} s="0.0" length="{length!r}" '
-            f'id="{way["id"]}.{kind}" name={quoteattr(name)} '
-            f'type="{typ}"/></objects>')
 
 
 def user_data(way: dict, stops: list[tuple[float, dict]]) -> str:
@@ -266,7 +197,7 @@ def main(argv: list[str]) -> int:
     if len(argv) > 2:
         data = json.loads(pathlib.Path(argv[2]).read_text('utf-8'))
     else:
-        data = fetch()
+        data = fetch(QUERY)
     m = build(data)
     odrcore.dump(m, out)
     for rel_id, label in TRACKS:
