@@ -22,6 +22,7 @@
 #include <QPinchGesture>
 #include <QVector4D>
 #include <QWheelEvent>
+#include <QtMath>
 
 #include <algorithm>
 #include <cmath>
@@ -384,7 +385,8 @@ void RDomainWidget::setObjectTransform(
     float tz,
     float sx,
     float sy,
-    float sz)
+    float sz,
+    float yaw)
 {
     auto const it = m_objects.find(name);
     if (it == m_objects.end())
@@ -393,10 +395,13 @@ void RDomainWidget::setObjectTransform(
     }
     QMatrix4x4 model;
     model.translate(tx, ty, tz);
+    model.rotate(qRadiansToDegrees(yaw), 0.0f, 0.0f, 1.0f);
     model.scale(sx, sy, sz);
     it->second.drawable->setModel(model);
 
-    // Grow the framing box to include the transformed object corners.
+    // Grow the framing box to include the transformed object corners. Refit
+    // the camera only on the object's first placement, so an object moved
+    // every frame never resets a view the user has navigated to.
     QVector3D lo;
     QVector3D hi;
     mesh_bounds(*it->second.mesh, lo, hi);
@@ -409,7 +414,11 @@ void RDomainWidget::setObjectTransform(
         QVector3D const mapped = model.map(corner);
         m_scene.extendBoundingBox(mapped, mapped);
     }
-    m_scene.fitCameraToScene(viewportAspect());
+    if (!it->second.placed)
+    {
+        it->second.placed = true;
+        m_scene.fitCameraToScene(viewportAspect());
+    }
     update();
 }
 
@@ -429,6 +438,16 @@ void RDomainWidget::setObjectOpacity(std::string const & name, float opacity)
     if (it != m_objects.end())
     {
         it->second.drawable->setOpacity(opacity);
+        update();
+    }
+}
+
+void RDomainWidget::setObjectColor(std::string const & name, float r, float g, float b, float a)
+{
+    auto const it = m_objects.find(name);
+    if (it != m_objects.end())
+    {
+        it->second.drawable->setColor(QVector4D(r, g, b, a));
         update();
     }
 }

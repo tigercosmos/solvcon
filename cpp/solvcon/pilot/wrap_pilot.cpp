@@ -236,7 +236,8 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapRDomainWidget
                 py::arg("sx") = 1.0f,
                 py::arg("sy") = 1.0f,
                 py::arg("sz") = 1.0f,
-                "Set a named object's translate and scale model transform.")
+                py::arg("yaw") = 0.0f,
+                "Set a named object's model transform: translate, then yaw about z in radians, then scale.")
             .def(
                 "setObjectVisible",
                 &wrapped_type::setObjectVisible,
@@ -247,6 +248,15 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapRDomainWidget
                 &wrapped_type::setObjectOpacity,
                 py::arg("name"),
                 py::arg("opacity"))
+            .def(
+                "setObjectColor",
+                &wrapped_type::setObjectColor,
+                py::arg("name"),
+                py::arg("r"),
+                py::arg("g"),
+                py::arg("b"),
+                py::arg("a") = 1.0f,
+                "Set a named object's flat color; the opacity still scales the alpha.")
             .def("objectNames", &wrapped_type::objectNames)
             .def("showMesh", &wrapped_type::showMesh, py::arg("show"))
             .def("setMeshOpacity", &wrapped_type::setMeshOpacity, py::arg("opacity"))

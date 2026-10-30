@@ -122,9 +122,11 @@ public:
         float tz,
         float sx,
         float sy,
-        float sz);
+        float sz,
+        float yaw = 0.0f);
     void setObjectVisible(std::string const & name, bool visible);
     void setObjectOpacity(std::string const & name, float opacity);
+    void setObjectColor(std::string const & name, float r, float g, float b, float a);
     std::vector<std::string> objectNames() const;
 
     /// Show or hide the mesh, in whatever representation is active.
@@ -445,6 +447,7 @@ private:
     {
         RDrawable * drawable = nullptr;
         std::shared_ptr<StaticMesh> mesh;
+        bool placed = false; ///< Whether a transform has framed it once.
     }; /* end struct ObjectEntry */
     std::map<std::string, ObjectEntry> m_objects;
     std::vector<float> m_ticks_x; ///< Cube-axes tick coordinates per axis.
