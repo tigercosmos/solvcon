@@ -10,6 +10,7 @@ road chain of a Yamanote Line loop.
 
 import json
 import math
+import os
 import urllib.parse
 import urllib.request
 from xml.sax.saxutils import quoteattr
@@ -19,17 +20,18 @@ import numpy as np
 from odrcore.geom import ParamPoly3
 from odrcore.model import Map, Road
 
-OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
+OVERPASS_URL = os.environ.get('OVERPASS_URL',
+                              'https://overpass-api.de/api/interpreter')
 MIN_SPACING = 2.0
 
 _GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(16)
 
 
-def fetch(query: str) -> dict:
+def fetch(query: str, timeout: float = 180.0) -> dict:
     body = urllib.parse.urlencode({'data': query}).encode()
     req = urllib.request.Request(OVERPASS_URL, body,
                                  {'User-Agent': 'solvcon-odrcore'})
-    with urllib.request.urlopen(req, timeout=180) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.load(resp)
 
 
@@ -49,6 +51,17 @@ def tangents(xy: np.ndarray) -> np.ndarray:
     h1 = np.hypot(*(nxt - xy).T)[:, None]
     t = (h1 * (xy - prev) / h0 + h0 * (nxt - xy) / h1) / (h0 + h1)
     return t / np.hypot(*t.T)[:, None]
+
+
+def open_tangents(xy: np.ndarray) -> np.ndarray:
+    """The Bessel tangents of an open polyline, with the chord direction
+    at the two ends."""
+    t = np.empty_like(xy)
+    if len(xy) > 2:
+        t[1:-1] = tangents(xy)[1:-1]
+    t[0], t[-1] = xy[1] - xy[0], xy[-1] - xy[-2]
+    t[[0, -1]] /= np.hypot(*t[[0, -1]].T)[:, None]
+    return t
 
 
 def hermite(s0: float, p0, p1, t0, t1) -> ParamPoly3:
