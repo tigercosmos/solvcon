@@ -97,6 +97,7 @@ set(SOLVCON_PILOT_PYMODSOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/visual/RMaterial.cpp
     # canvas/
     ${CMAKE_CURRENT_SOURCE_DIR}/canvas/RTextOverlay.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/canvas/RLabelOverlay.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/canvas/R2DWidget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/canvas/DrawTool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/canvas/RWorldRenderer2d.cpp

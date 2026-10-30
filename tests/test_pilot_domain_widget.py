@@ -1691,6 +1691,67 @@ class RDomainWidgetCubeAxesTC(unittest.TestCase):
         self.assertGreater(_count_foreground(_grab_or_skip(axes_widget)), base)
 
 
+@testing.requires_pilot
+class RDomainWidgetLabelTC(unittest.TestCase):
+    """Text labels anchored to world points."""
+
+    @classmethod
+    def setUpClass(cls):
+        pilot.RManager.instance.setUp()
+
+    def test_label_names_add_replace_remove_clear(self):
+        """Labels are listed by name; re-adding a name replaces it."""
+        widget = pilot.RDomainWidget()
+        self.assertEqual(list(widget.labelNames()), [])
+        widget.addLabel("b", "Beta", 1.0, 0.5, 0.0)
+        widget.addLabel("a", "Alpha", 0.0, 0.0, 0.0, dx=4.0, dy=-2.0)
+        widget.addLabel("a", "Alpha again", 0.5, 0.5, 0.0)
+        self.assertEqual(list(widget.labelNames()), ["a", "b"])
+        widget.removeLabel("a")
+        widget.removeLabel("unknown")
+        self.assertEqual(list(widget.labelNames()), ["b"])
+        widget.clearLabels()
+        self.assertEqual(list(widget.labelNames()), [])
+
+    def test_show_labels_round_trip(self):
+        """Labels are shown by default and the toggle reads back."""
+        widget = pilot.RDomainWidget()
+        self.assertTrue(widget.labelsShown)
+        widget.showLabels(False)
+        self.assertFalse(widget.labelsShown)
+
+    def test_label_draws_text(self):
+        """A label inside the view adds drawn pixels over the wireframe."""
+        base = _count_foreground(_grab_or_skip(_framed_2d_widget()))
+
+        widget = _framed_2d_widget()
+        widget.addLabel("mid", "Shinjuku", 1.0, 0.5, 0.0)
+        self.assertGreater(_count_foreground(_grab_or_skip(widget)),
+                           base + 50)
+
+    def test_hidden_label_draws_nothing(self):
+        """Hiding the labels draws the frame without them."""
+        base = _count_foreground(_grab_or_skip(_framed_2d_widget()))
+
+        widget = _framed_2d_widget()
+        widget.addLabel("mid", "Shinjuku", 1.0, 0.5, 0.0)
+        widget.showLabels(False)
+        self.assertEqual(_count_foreground(_grab_or_skip(widget)), base)
+
+    def test_label_outside_the_view_draws_nothing(self):
+        """A label far off screen or behind the eye is skipped."""
+        base = _count_foreground(_grab_or_skip(_framed_2d_widget()))
+
+        widget = _framed_2d_widget()
+        position = widget.cameraPosition
+        target = widget.cameraTarget
+        behind = [p + 10.0 * (p - t) for p, t in zip(position, target)]
+        widget.addLabel("far", "Far", 1000.0, 1000.0, 0.0)
+        widget.addLabel("behind", "Behind", *behind)
+        self.assertEqual(_count_foreground(_grab_or_skip(widget)), base)
+
+
+@testing.requires_pilot
 class RDomainWidgetZoomTC(unittest.TestCase):
     """Zoom to the selection and reset the camera."""
 

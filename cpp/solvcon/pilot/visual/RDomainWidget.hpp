@@ -19,6 +19,7 @@
 #include <solvcon/pilot/visual/RColormap.hpp>
 #include <solvcon/pilot/visual/RScalarBar.hpp>
 #include <solvcon/pilot/visual/RScene.hpp>
+#include <solvcon/pilot/canvas/RLabelOverlay.hpp>
 #include <solvcon/pilot/canvas/RTextOverlay.hpp>
 #include <solvcon/pilot/visual/RDrawable.hpp>
 
@@ -128,6 +129,25 @@ public:
     void setObjectOpacity(std::string const & name, float opacity);
     void setObjectColor(std::string const & name, float r, float g, float b, float a);
     std::vector<std::string> objectNames() const;
+
+    /**
+     * Anchor the text label @p name at the world point (@p x, @p y, @p z),
+     * drawn at a fixed pixel size and shifted by (@p dx, @p dy) logical pixels
+     * (x right, y down). Re-adding a name replaces the label.
+     */
+    void addLabel(
+        std::string const & name,
+        std::string const & text,
+        float x,
+        float y,
+        float z,
+        float dx = 8.0f,
+        float dy = 0.0f);
+    void removeLabel(std::string const & name);
+    void clearLabels();
+    void showLabels(bool show);
+    bool labelsShown() const { return m_labels.isVisible(); }
+    std::vector<std::string> labelNames() const { return m_labels.names(); }
 
     /// Show or hide the mesh, in whatever representation is active.
     void showMesh(bool show);
@@ -454,6 +474,7 @@ private:
     std::vector<float> m_ticks_y;
     std::vector<float> m_ticks_z;
     RTextOverlay m_title; ///< The figure-title overlay.
+    RLabelOverlay m_labels; ///< The world-anchored text labels.
     bool m_has_selection = false;
     std::string m_selection_kind = "none";
     int m_selection_id = -1;
