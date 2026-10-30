@@ -1691,7 +1691,6 @@ class RDomainWidgetCubeAxesTC(unittest.TestCase):
         self.assertGreater(_count_foreground(_grab_or_skip(axes_widget)), base)
 
 
-@testing.requires_pilot
 class RDomainWidgetZoomTC(unittest.TestCase):
     """Zoom to the selection and reset the camera."""
 
@@ -2018,6 +2017,82 @@ class RDomainWidgetCameraTC(unittest.TestCase):
         self.assertAlmostEqual(radius(), start / 2.0, places=4)
         widget.pinchCamera(0.5)
         self.assertAlmostEqual(radius(), start, places=4)
+
+    def test_orbit_zoom_reaches_far_below_the_scene_radius(self):
+        """Orbit zoom keeps dollying in far closer than 5% of the scene
+        radius, and stops short of the pivot rather than crossing it."""
+        import math
+        widget = pilot.RDomainWidget()
+        widget.updateMesh(_make_3d_mesh())
+        target = tuple(widget.cameraTarget)
+
+        def distance():
+            pos = tuple(widget.cameraPosition)
+            return math.sqrt(sum((p - t) ** 2 for p, t in zip(pos, target)))
+
+        # The tetrahedron's bounding box spans (-1, 0, 0) to (0, 1, 1).
+        scene_radius = math.sqrt(3.0) / 2.0
+        start = distance()
+        for _ in range(60):
+            widget.zoomCamera(1.0)
+        self.assertLess(distance(), 0.01 * scene_radius)
+        self.assertLess(distance(), start * 1.0e-2)
+
+        for _ in range(200):
+            widget.zoomCamera(1.0)
+        closest = distance()
+        self.assertGreater(closest, 0.0)
+        self.assertLess(closest, 1.0e-4 * scene_radius)
+        for a, b in zip(target, tuple(widget.cameraTarget)):
+            self.assertAlmostEqual(a, b, places=5)
+
+    def test_pan_zoom_reaches_far_below_the_old_limit(self):
+        """The orthographic zoom factor shrinks far below 2% of the scene
+        extent."""
+        widget = pilot.RDomainWidget()
+        widget.updateMesh(_make_2d_mesh())
+        self.assertEqual(widget.cameraMode, "pan")
+        for _ in range(60):
+            widget.zoomCamera(1.0)
+        self.assertLess(widget.cameraZoom, 1.0e-3)
+        self.assertGreater(widget.cameraZoom, 0.0)
+
+    def test_orbit_pan_scales_with_the_zoom(self):
+        """An orbit pan drag moves the target in proportion to the
+        eye-to-pivot distance, so zoomed in far it moves far less."""
+        import math
+        widget = pilot.RDomainWidget()
+        widget.updateMesh(_make_3d_mesh())
+        self.assertEqual(widget.cameraMode, "orbit")
+
+        def pan_shift():
+            before = tuple(widget.cameraTarget)
+            widget.panCamera(60.0, 0.0)
+            after = tuple(widget.cameraTarget)
+            return math.sqrt(sum((a - b) ** 2 for a, b in zip(after, before)))
+
+        far_shift = pan_shift()
+        self.assertGreater(far_shift, 0.0)
+        for _ in range(60):
+            widget.zoomCamera(1.0)
+        near_shift = pan_shift()
+        self.assertGreater(near_shift, 0.0)
+        self.assertLess(near_shift, far_shift * 1.0e-2)
+
+    def test_orbit_close_up_is_not_clipped(self):
+        """An eye zoomed in to 0.1% of the scene radius from an edge still
+        draws that edge: the near plane follows the eye-to-pivot distance
+        instead of clipping everything closer than 1% of the radius."""
+        widget = pilot.RDomainWidget()
+        widget.resize(320, 240)
+        widget.updateMesh(_make_3d_mesh())
+        _show_only(widget, "wireframe")
+        widget.fitCameraToScene()
+        # Midpoint of the edge from node 0 (0, 0, 0) to node 1 (0, 1, 0).
+        widget.setPivot(0.0, 0.5, 0.0)
+        for _ in range(60):
+            widget.zoomCamera(1.0)
+        self.assertGreater(_count_foreground(_grab_or_skip(widget)), 0)
 
     def test_pinch_ignores_nonpositive_factor(self):
         """A non-positive pinch factor is ignored rather than applied."""

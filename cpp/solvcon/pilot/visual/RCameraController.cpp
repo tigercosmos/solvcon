@@ -21,9 +21,9 @@ constexpr float FOV_DEGREES = 45.0f; // Matches RScene's perspective FOV.
 constexpr float LOOK_DEGREES_PER_PIXEL = 0.3f;
 constexpr float PAN_PIXELS_PER_EXTENT = 300.0f;
 constexpr float ZOOM_PER_STEP = 0.12f;
-constexpr float ORTHO_SCALE_MIN = 0.02f;
+constexpr float ORTHO_SCALE_MIN = 1.0e-5f;
 constexpr float ORTHO_SCALE_MAX = 50.0f;
-constexpr float ORBIT_DISTANCE_MIN = 0.05f; // Times the scene radius.
+constexpr float ORBIT_DISTANCE_MIN = 1.0e-5f; // Times the scene radius; ~10 cm on a 10 km scene.
 constexpr float ORBIT_DISTANCE_MAX = 20.0f; // Times the scene radius.
 
 } /* end namespace */
@@ -198,8 +198,14 @@ void RCameraController::pan(float dx, float dy)
 {
     // A drag across the viewport pans roughly the visible extent, moving in
     // the camera's own plane (the screen right and screen up axes). Screen up
-    // is the world up head-on, so the 2D pan is unchanged.
-    float const extent = 2.0f * m_radius * m_ortho_scale;
+    // is the world up head-on, so the 2D pan is unchanged. The orbit extent is
+    // the perspective view height at the pivot, so a close-up pans finely.
+    float extent = 2.0f * m_radius * m_ortho_scale;
+    if (Mode::Orbit == m_mode)
+    {
+        float const distance = (m_position - m_target).length();
+        extent = 2.0f * distance * std::tan(qDegreesToRadians(FOV_DEGREES) * 0.5f);
+    }
     float const sx = -dx / PAN_PIXELS_PER_EXTENT * extent;
     float const sy = dy / PAN_PIXELS_PER_EXTENT * extent;
     QVector3D const screen_up = QVector3D::crossProduct(rightAxis(), forward()).normalized();
