@@ -6,9 +6,10 @@ Build an OpenDRIVE map of the roads within 500 m of the JR East Yamanote
 Line from OpenStreetMap.
 
 The search area follows the Outer loop of the track map that
-``yamanote.py`` writes: its reference line is sampled every ``STEP`` and
-sent to the Overpass API as an ``around`` polyline. Every road way of a
-``HIGHWAYS`` class that comes within ``RADIUS`` of it is kept whole, not
+``yamanote.py`` writes. The Overpass API is asked for the road ways of the
+``HIGHWAYS`` classes in the ``CELL`` squares around the loop reference line
+(its ``around`` filter returns nothing or hangs), and a way is kept when
+one of its nodes is within ``RADIUS`` of the line. A way is kept whole, not
 clipped at the edge of the buffer. Each way becomes one road, with the OSM
 way id as the road id and no road links or junctions. Ways that meet share
 a node, so their end points coincide, but each way is fitted on its own and
@@ -66,9 +67,11 @@ from _osmroad import (MIN_SPACING, fetch, hermite, loop_chain,  # noqa: E402
 BASE_MAP = pathlib.Path(__file__).resolve().parent / 'yamanote.xodr'
 LOOP = 'Outer'
 RADIUS = 500.0
-STEP = 100.0
-CHUNK = 10
 PROJECT_STEP = 5.0
+NEAR_STEP = 25.0
+CELL = 500.0
+BOXES_PER_QUERY = 25
+QUERY_PAUSE = 10.0
 MAJOR = ('motorway', 'trunk', 'primary', 'secondary', 'tertiary')
 MINOR = ('unclassified', 'residential', 'living_street')
 HIGHWAYS = MAJOR + MINOR + tuple(f'{c}_link' for c in MAJOR)
@@ -95,20 +98,14 @@ STOP_RE = re.compile(r'osm:stop" value="(\w+) .*? s=([-0-9.e+]+)')
 HIGHWAY_RE = re.compile(r'osm:highway" value="(\w+)"')
 
 
-def query(points: list[tuple[float, float]]) -> str:
-    """The ways around the polyline through ``points``. An ``around`` line
-    of the whole loop timed out or came back empty from Overpass, so the
-    line goes in short pieces of ``CHUNK`` points, each searched on its own
-    small bounding box."""
+def query(boxes: list[tuple[float, float, float, float]]) -> str:
+    """The road ways with a node in one of the ``(south, west, north,
+    east)`` boxes, and their signal and crossing nodes."""
     classes, marks = '|'.join(HIGHWAYS), '|'.join(NODE_TAGS)
-    pieces = []
-    for i in range(0, len(points) - 1, CHUNK):
-        line = ','.join(f'{lat:.6f},{lon:.6f}'
-                        for lat, lon in points[i:i + CHUNK + 1])
-        pieces.append(f'way["highway"~"^({classes})$"]'
-                      f'(around:{RADIUS:g},{line});')
-    return (f'[out:json][timeout:{SERVER_TIMEOUT:g}];'
-            f'({"".join(pieces)})->.w;'
+    pieces = ''.join(f'way["highway"~"^({classes})$"]'
+                     f'({",".join(f"{v:.6f}" for v in box)});'
+                     for box in boxes)
+    return (f'[out:json][timeout:{SERVER_TIMEOUT:g}];({pieces})->.w;'
             f'.w out body geom;node(w.w)["highway"~"^({marks})$"];out;')
 
 
@@ -134,14 +131,38 @@ class Loop:
         self.stop_s = np.array([s for s, _ in stops], dtype='float64')
         self.codes = [code for _, code in stops]
 
-    def search_line(self) -> list[tuple[float, float]]:
-        """``(lat, lon)`` every ``STEP`` around the loop, closed."""
-        pts = []
-        for s in np.arange(0.0, self.length, STEP, dtype='float64'):
-            k = min(int(np.searchsorted(self.s, s)), len(self.s) - 1)
-            x, y = self.xy[k]
-            pts.append(self.plane.to_geodetic(x, y, 0.0)[:2])
-        return pts + pts[:1]
+    def boxes(self) -> list[tuple[float, float, float, float]]:
+        """``(south, west, north, east)`` boxes that cover the ``RADIUS``
+        buffer of the loop: the ``CELL`` squares of the plane the loop
+        passes through and their neighbors, merged along each row."""
+        cells = {(int(i) + di, int(j) + dj)
+                 for i, j in np.floor(self.xy / CELL)
+                 for di in (-1, 0, 1) for dj in (-1, 0, 1)}
+        out = []
+        for j in sorted({j for _, j in cells}):
+            row = sorted(i for i, jj in cells if jj == j)
+            start = row[0]
+            for prev, i in zip(row, row[1:] + [None]):
+                if i == prev + 1:
+                    continue
+                corners = [self.plane.to_geodetic(x * CELL, y * CELL, 0.0)
+                           for x in (start, prev + 1) for y in (j, j + 1)]
+                lat = [c[0] for c in corners]
+                lon = [c[1] for c in corners]
+                out.append((min(lat), min(lon), max(lat), max(lon)))
+                start = i
+        return out
+
+    def near(self, xy: np.ndarray) -> np.ndarray:
+        """Whether each point is within ``RADIUS`` of the loop."""
+        step = max(int(round(NEAR_STEP / PROJECT_STEP)), 1)
+        line = self.xy[::step]
+        out, chunk = np.zeros(len(xy), dtype='bool'), 2048
+        for k in range(0, len(xy), chunk):
+            d = xy[k:k + chunk, None, :] - line[None, :, :]
+            out[k:k + chunk] = (np.einsum('ijk,ijk->ij', d, d).min(axis=1)
+                                <= RADIUS * RADIUS)
+        return out
 
     def project(self, xy) -> float:
         d = np.hypot(*(self.xy - np.asarray(xy, dtype='float64')).T)
@@ -314,12 +335,27 @@ def make_road(way: dict, xy: np.ndarray, ids: list[int],
     return road
 
 
-def build(data: dict, base: Map) -> tuple[Map, list[str]]:
-    """The road map and the ids of the ways left out."""
+def build(data: dict, base: Map) -> tuple[Map, list[str], int]:
+    """The road map, the ids of the ways of one distinct node and the
+    number of ways farther than ``RADIUS`` from the loop."""
+    loop = Loop(base)
+    ltp = loop.plane
     ways = {}
     for e in data['elements']:
         if e['type'] == 'way':
             ways.setdefault(e['id'], e)
+    coords = {nid: g for way in ways.values()
+              for nid, g in zip(way['nodes'], way['geometry'])}
+    order = list(coords)
+    near = loop.near(np.array(
+        [ltp.to_local(coords[n]['lat'], coords[n]['lon'], 0.0)[:2]
+         for n in order], dtype='float64').reshape(-1, 2))
+    near_ids = {n for n, ok in zip(order, near) if ok}
+    inside = {k: w for k, w in ways.items()
+              if near_ids.intersection(w['nodes'])}
+    outside = len(ways) - len(inside)
+    ways = inside
+
     marked = {e['id']: NODE_TAGS[e['tags']['highway']]
               for e in data['elements']
               if e['type'] == 'node'
@@ -330,8 +366,6 @@ def build(data: dict, base: Map) -> tuple[Map, list[str]]:
             uses[nid] = uses.get(nid, 0) + 1
     pinned = {n for n, c in uses.items() if c > 1} | set(marked)
 
-    loop = Loop(base)
-    ltp = loop.plane
     m, skipped, corners = Map(), [], []
     for way in ways.values():
         xy, ids = vertices(way, ltp, pinned)
@@ -353,7 +387,7 @@ def build(data: dict, base: Map) -> tuple[Map, list[str]]:
         f'<userData code="source" value="{ATTRIBUTION}"/>')
     m.frame = Frame(geo_reference=base.frame.geo_reference)
     m.reindex()
-    return m, skipped
+    return m, skipped, outside
 
 
 def fetch_politely(text: str) -> dict:
@@ -368,6 +402,23 @@ def fetch_politely(text: str) -> dict:
         return fetch(text, CLIENT_TIMEOUT)
 
 
+def fetch_all(boxes: list[tuple[float, float, float, float]]) -> dict:
+    """The union of the answers to the queries of ``BOXES_PER_QUERY``
+    boxes each."""
+    elements, seen = [], set()
+    for i in range(0, len(boxes), BOXES_PER_QUERY):
+        if i:
+            time.sleep(QUERY_PAUSE)
+        part = fetch_politely(query(boxes[i:i + BOXES_PER_QUERY]))
+        for e in part['elements']:
+            if (e['type'], e['id']) not in seen:
+                seen.add((e['type'], e['id']))
+                elements.append(e)
+        print(f'boxes {i + 1} to {min(i + BOXES_PER_QUERY, len(boxes))} '
+              f'of {len(boxes)}: {len(part["elements"])} elements')
+    return {'elements': elements}
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__.strip().split('\n\n')[0])
@@ -380,11 +431,11 @@ def main(argv: list[str]) -> int:
     if args.overpass:
         data = json.loads(args.overpass.read_text('utf-8'))
     else:
-        data = fetch_politely(query(Loop(base).search_line()))
+        data = fetch_all(Loop(base).boxes())
         cache = args.out.with_suffix('.json')
         cache.write_text(json.dumps(data), 'utf-8')
         print(f'saved the Overpass response to {cache}')
-    m, skipped = build(data, base)
+    m, skipped, outside = build(data, base)
     odrcore.dump(m, args.out)
 
     lengths: dict[str, list[float]] = {h: [] for h in HIGHWAYS}
@@ -397,6 +448,7 @@ def main(argv: list[str]) -> int:
                   f'{sum(of_class) / 1000.0:.3f} km')
     total = sum(r.length for r in m.roads.values())
     print(f'total: {len(m.roads)} roads, {total / 1000.0:.3f} km')
+    print(f'left out {outside} ways farther than {RADIUS:g} m')
     if skipped:
         print(f'skipped {len(skipped)} ways with one distinct node: '
               f'{", ".join(skipped)}')

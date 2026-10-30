@@ -38,7 +38,8 @@ def overpass(loop, s_mid, s_wrap):
     """Ways 100 m beside the loop at ``s_mid``: a two-way residential way,
     a straight one-way primary with three lanes and a signal in the middle,
     a secondary with lanes per direction and a width, all chained through
-    shared nodes, and a way of one repeated node. Way 15 lies beside the
+    shared nodes, a way of one repeated node, way 16 out of the buffer and
+    way 17 reaching out of it from within. Way 15 lies beside the
     loop at ``s_wrap``, just before the end of the chain."""
     p, nrm, tan = loop_frame(loop, s_mid)
     origin = p + 100.0 * nrm
@@ -48,7 +49,8 @@ def overpass(loop, s_mid, s_wrap):
              4: origin + 40.0 * tan,
              5: origin + 80.0 * tan,
              6: origin + 110.0 * tan + 30.0 * nrm,
-             7: origin + 200.0 * nrm}
+             7: origin + 200.0 * nrm,
+             20: origin + 600.0 * nrm, 21: origin + 800.0 * nrm}
     p, nrm, tan = loop_frame(loop, s_wrap)
     local[8] = p + 80.0 * nrm - 20.0 * tan
     local[9] = p + 80.0 * nrm + 20.0 * tan
@@ -73,6 +75,8 @@ def overpass(loop, s_mid, s_wrap):
             'name': 'Ginza-dori', 'name:en': 'Ginza Avenue'}),
         way(14, [7, 7], highway='tertiary'),
         way(15, [8, 9], highway='unclassified'),
+        way(16, [20, 21], highway='residential'),
+        way(17, [7, 20], highway='residential'),
         {'type': 'node', 'id': 4, **geo[4],
          'tags': {'highway': 'traffic_signals'}},
     ]
@@ -83,7 +87,8 @@ def overpass(loop, s_mid, s_wrap):
 def built(base, loop):
     s_mid = 0.5 * (loop.stop_s[0] + loop.stop_s[1])
     data, local = overpass(loop, s_mid, loop.length - 50.0)
-    m, skipped = yamanote_roads.build(data, base)
+    m, skipped, outside = yamanote_roads.build(data, base)
+    assert outside == 1
     return m, skipped, local
 
 
@@ -139,7 +144,7 @@ def test_shared_ends_coincide(built):
 def test_one_node_way_skipped(built):
     m, skipped, _ = built
     assert skipped == ['14']
-    assert sorted(m.roads) == ['11', '12', '13', '15']
+    assert sorted(m.roads) == ['11', '12', '13', '15', '17']
 
 
 def test_segment(built, loop):
@@ -166,6 +171,24 @@ def test_user_data(built):
     assert '<bridge ' in m.roads['12'].attrs['_unknown']
     assert user_data(m.roads['13'])['osm:name'] == 'Ginza Avenue'
     assert user_data(m.roads['11'])['osm:name'] == 'Sakura-dori'
+
+
+def test_boxes_cover_buffer(loop):
+    boxes = loop.boxes()
+    rng = np.random.default_rng(0)
+    k = rng.integers(0, len(loop.xy), 200)
+    ang = rng.uniform(0.0, 2.0 * np.pi, 200)
+    unit = np.stack([np.cos(ang), np.sin(ang)], axis=1)
+    edge = loop.xy[k] + 0.999 * yamanote_roads.RADIUS * unit
+    for x, y in edge:
+        lat, lon, _ = loop.plane.to_geodetic(x, y, 0.0)
+        assert any(s <= lat <= n and w <= lon <= e for s, w, n, e in boxes)
+    # near() checks against the line sampled every NEAR_STEP, so it may
+    # miss a point within half a step of the buffer edge.
+    margin = yamanote_roads.RADIUS - 0.5 * yamanote_roads.NEAR_STEP
+    assert loop.near(loop.xy[k] + margin * unit).all()
+    # The middle of the loop is kilometers from the line.
+    assert not loop.near(loop.xy.mean(axis=0)[None, :])[0]
 
 
 def test_roundtrip(built, base, tmp_path):
