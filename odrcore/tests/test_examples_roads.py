@@ -12,6 +12,7 @@ import pytest
 import odrcore
 from odrcore.model import RoadLink
 
+ATTR = r'(\w+)="([^"]*)"'
 EXAMPLES = pathlib.Path(odrcore.__file__).parent / 'examples'
 sys.path.insert(0, str(EXAMPLES))
 import _gsi  # noqa: E402
@@ -178,10 +179,7 @@ def test_user_data(built):
     assert data['osm:way'] == '12'
     assert data['osm:highway'] == 'primary'
     assert data['osm:layer'] == '1'
-    s = float(re.match(r's=(\S+) node=4$', data['osm:signal'])
-              .group(1))
-    at = m.roads['12'].refline.point(s, 0.0)[:2]
-    assert math.dist(at, local[4]) < 1e-6
+    assert 'osm:signal' not in data
     assert '<bridge ' in m.roads['12'].attrs['_unknown']
     assert user_data(m.roads['13'])['osm:name'] == 'Ginza Avenue'
     assert user_data(m.roads['11'])['osm:name'] == 'Sakura-dori'
@@ -191,7 +189,8 @@ def test_user_data(built):
 def crossing(base, loop):
     """Way 31 bends through node 42, where one-way way 32 leaves it. Way 33
     runs into the end of way 32 head to head, and starts where way 35, a
-    single lane for both directions, starts too. Way 34 is a roundabout."""
+    single lane for both directions, starts too. Way 34 is a roundabout.
+    Nodes 42 and 51 have traffic signals and node 45 a crossing."""
     p, nrm, tan = loop_frame(loop, 0.5 * (loop.stop_s[2] + loop.stop_s[3]))
     o = p + 100.0 * nrm
     angles = np.linspace(0.0, 2.0 * np.pi, 8, endpoint=False,
@@ -202,17 +201,22 @@ def crossing(base, loop):
     geo, _ = on_ellipsoid(loop, {
         41: o - 60.0 * tan + 10.0 * nrm, 42: o,
         43: o + 60.0 * tan + 10.0 * nrm, 44: o - 50.0 * nrm,
-        46: o - 120.0 * nrm + 20.0 * tan, 50: o - 190.0 * nrm + 50.0 * tan,
+        45: o - 85.0 * nrm + 10.0 * tan, 46: o - 120.0 * nrm + 20.0 * tan,
+        50: o - 190.0 * nrm + 50.0 * tan, 51: o - 155.0 * nrm + 35.0 * tan,
         **ring})
     elements = [
         osm_way(geo, 31, [41, 42, 43], highway='residential'),
         osm_way(geo, 32, [42, 44], highway='residential', oneway='yes'),
-        osm_way(geo, 33, [46, 44], highway='primary',
+        osm_way(geo, 33, [46, 45, 44], highway='primary',
                 **{'lanes:forward': '2', 'lanes:backward': '1'}),
         osm_way(geo, 34, [*ring, 60], highway='residential',
                 junction='roundabout'),
-        osm_way(geo, 35, [46, 50], highway='residential', lanes='1'),
+        osm_way(geo, 35, [46, 51, 50], highway='residential', lanes='1'),
     ]
+    for nid, kind in ((42, 'traffic_signals'), (51, 'traffic_signals'),
+                      (45, 'crossing')):
+        elements.append({'type': 'node', 'id': nid, **geo[nid],
+                         'tags': {'highway': kind}})
     m, skipped, _ = yamanote_roads.build({'elements': elements}, base)
     assert skipped == []
     return m
@@ -373,6 +377,66 @@ def test_tile_cache(tmp_path):
     assert tiles.height(lat, lon) == (12.5, 'dem5a')
     # The tile on disk stands in for the server.
     assert tiles.fetched == 0
+
+
+def signals(road):
+    return {sig.id: (sig.orientation, round(sig.t, 9), sig.validity)
+            for sig in road.signals}
+
+
+def test_signal_one_way(built):
+    m, _, local = built
+    road = m.roads['12']
+    (sig,) = road.signals
+    assert (sig.type, sig.subtype, sig.country, sig.dynamic) == \
+        ('1000001', '-1', 'JPN', True)
+    # One light for the three lanes, on their outer edge to the left.
+    assert signals(road) == {'sig4': ('+', 4.5, [(1, 3)])}
+    assert math.dist(road.refline.point(sig.s, 0.0)[:2], local[4]) < 1e-6
+    assert m.signals['sig4'] is sig
+
+
+def test_signal_two_way(crossing):
+    road = crossing.roads['35']
+    assert signals(road) == {'sig51': ('+', 1.375, [(1, 1)]),
+                             'sig51r': ('-', -1.375, [(1, 1)])}
+
+
+def test_signal_at_junction(crossing):
+    m = crossing
+    # Only the lanes that arrive at the node get a light; the one-way way
+    # 32 leaves the junction and gets none.
+    assert signals(m.roads['31']) == {'sig42-31': ('+', 2.75, [(1, 1)])}
+    assert signals(m.roads['31.1']) == \
+        {'sig42r-31.1': ('-', -2.75, [(-1, -1)])}
+    assert signals(m.roads['32']) == {}
+
+
+def test_crosswalk(crossing):
+    road = crossing.roads['33']
+    walk = re.search(r'<object [^>]*type="crosswalk"[^>]*/>',
+                     road.attrs['_unknown']).group(0)
+    attrs = dict(re.findall(ATTR, walk))
+    assert attrs['id'] == 'cw45'
+    assert float(attrs['width']) == pytest.approx(9.0)
+    assert float(attrs['t']) == pytest.approx(0.0)
+    s = float(attrs['s'])
+    assert 0.0 < s < road.length
+    assert 'osm:crossing' not in user_data(road)
+
+
+def test_signals_roundtrip(crossing, tmp_path):
+    path = tmp_path / 'crossing.xodr'
+    odrcore.dump(crossing, path)
+    back = odrcore.load(path)
+    for rid, road in crossing.roads.items():
+        assert signals(back.roads[rid]) == signals(road)
+        assert re.findall(ATTR, back.roads[rid].attrs.get('_unknown', '')) \
+            == re.findall(ATTR, road.attrs.get('_unknown', ''))
+    reg = back.regulations['sig:sig51r']
+    assert reg.kind == 'traffic_light'
+    assert [ln.id for ln in reg.roles['refers']] == [('35', 0, 1)]
+    assert sorted(back.signals) == sorted(crossing.signals)
 
 
 def test_boxes_cover_buffer(loop):
