@@ -83,10 +83,12 @@ def overpass(loop, s_mid, s_wrap):
     elements = [
         way(11, [1, 2, 3], highway='residential', name='Sakura-dori'),
         way(12, [3, 4, 5], highway='primary', oneway='yes', lanes='3',
-            maxspeed='50', bridge='yes', layer='1'),
+            maxspeed='50', bridge='yes', layer='1',
+            **{'turn:lanes': 'left|through|through;right'}),
         way(13, [5, 6], highway='secondary', **{
             'lanes:forward': '2', 'lanes:backward': '1', 'width': '9',
-            'name': 'Ginza-dori', 'name:en': 'Ginza Avenue'}),
+            'name': 'Ginza-dori', 'name:en': 'Ginza Avenue',
+            'turn:lanes:forward': 'left', 'turn:lanes:backward': 'reverse'}),
         way(14, [7, 7], highway='tertiary'),
         way(15, [8, 9], highway='unclassified'),
         way(16, [20, 21], highway='residential'),
@@ -106,9 +108,9 @@ def built(base, loop):
     return m, skipped, local
 
 
-def user_data(road):
+def user_data(obj):
     return dict(re.findall(r'code="([^"]+)" value="([^"]*)"',
-                           road.attrs['userData']))
+                           obj.attrs.get('userData', '')))
 
 
 def test_lanes(built):
@@ -437,6 +439,55 @@ def test_signals_roundtrip(crossing, tmp_path):
     assert reg.kind == 'traffic_light'
     assert [ln.id for ln in reg.roles['refers']] == [('35', 0, 1)]
     assert sorted(back.signals) == sorted(crossing.signals)
+
+
+def paint(road):
+    sec = road.sections[0]
+    return {bnd.id.rsplit(':', 1)[1]: [(mk.type, mk.color, mk.width,
+                                        mk.lane_change) for mk in bnd.marks]
+            for bnd in sec.boundaries()}
+
+
+def test_marks(built, crossing):
+    m, _, _ = built
+    edge, center = ('solid', 'white', 0.15, None), \
+        ('solid', 'yellow', 0.15, 'none')
+    between = ('broken', 'white', 0.15, 'both')
+    assert paint(m.roads['11']) == {'0': [center], '1': [edge],
+                                    '-1': [edge]}
+    # A one-way road has edges on both sides and no center line.
+    assert paint(m.roads['12']) == {'0': [edge], '1': [between],
+                                    '2': [between], '3': [edge]}
+    assert paint(m.roads['13']) == {'0': [center], '1': [between],
+                                    '2': [edge], '-1': [edge]}
+    assert paint(crossing.roads['35']) == {'0': [edge], '1': [edge]}
+
+
+def turns(road):
+    return {ln.odr_id: user_data(ln).get('osm:turn')
+            for ln in road.lanes()}
+
+
+def test_turn_lanes(built):
+    m, _, _ = built
+    # OSM lists the lanes from the left in the travel direction, which is
+    # the outermost lane in left-hand traffic.
+    assert turns(m.roads['12']) == {1: 'through;right', 2: 'through',
+                                    3: 'left'}
+    # Way 13 names one of its two forward lanes, so they are left alone;
+    # its backward lane allows a U-turn.
+    assert turns(m.roads['13']) == {1: None, 2: None, -1: 'reverse'}
+    assert turns(m.roads['11']) == {1: None, -1: None}
+
+
+def test_marks_roundtrip(built, tmp_path):
+    m, _, _ = built
+    path = tmp_path / 'marks.xodr'
+    odrcore.dump(m, path)
+    back = odrcore.load(path)
+    for rid, road in m.roads.items():
+        assert paint(back.roads[rid]) == paint(road)
+        assert turns(back.roads[rid]) == turns(road)
 
 
 def test_boxes_cover_buffer(loop):

@@ -28,11 +28,15 @@ the way on the left (positive ids), the ones running against it on the
 right. The lane counts come from the ``lanes``, ``lanes:forward``,
 ``lanes:backward`` and ``oneway`` tags, else from the class. A two-way way
 tagged with a single lane gets one lane of direction ``both``. The lanes are
-centered on the way. A road also has a bridge or tunnel ``<objects>`` when
-the way is tagged so, and ``<userData>`` with the way id, class, name,
-layer and the ``segment`` of the line it belongs to: the two Outer-loop
-stations on either side of the point of the loop closest to the middle of
-the way, in station number order, e.g. ``JY05-JY06``.
+centered on the way and painted: a solid yellow center line between the
+two directions, broken white lines between the lanes of one direction and
+solid white edges. The ``turn:lanes`` tags go to ``<userData>``
+``osm:turn`` of each lane when they name as many lanes as the road has.
+A road also has a bridge or tunnel ``<objects>`` when the way is tagged
+so, and ``<userData>`` with the way id, class, name, layer and the
+``segment`` of the line it belongs to: the two Outer-loop stations on
+either side of the point of the loop closest to the middle of the way, in
+station number order, e.g. ``JY05-JY06``.
 
 A traffic signal node becomes a dynamic ``<signal>`` for each direction
 whose lanes arrive at it, ``sig<node id>`` on the left edge for the lanes
@@ -87,8 +91,8 @@ import numpy as np
 import odrcore
 from odrcore.geom import PiecewisePoly3
 from odrcore.model import (Boundary, Connection, End, Frame, Header,
-                           Junction, Lane, LaneSection, Map, Road, RoadLink,
-                           Signal, SpeedLimit, boundary_id)
+                           Junction, Lane, LaneSection, Map, MarkSegment,
+                           Road, RoadLink, Signal, SpeedLimit, boundary_id)
 from odrcore.osm import LocalTangentPlane, origin_of
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -113,6 +117,7 @@ NODE_TAGS = {'traffic_signals': 'signal', 'crossing': 'crossing'}
 # tools read whatever the country.
 TRAFFIC_LIGHT = '1000001'
 CROSSWALK_LENGTH = 4.0
+MARK_WIDTH = 0.15
 # Lanes in each direction when the way has no lane tags.
 DEFAULT_LANES = {'motorway': 2, 'trunk': 2, 'primary': 2}
 DEFAULT_SPEED = {
@@ -457,6 +462,45 @@ def add_lanes(road: Road, tags: dict) -> None:
                          PiecewisePoly3.constant(inner.t(0.0) - width))
         sec.right.append(Lane(sec, -k, inner, outer, speed=list(limit)))
         inner = outer
+    paint(sec, fwd > 0 and bwd > 0)
+    add_turns(sec, tags, fwd, bwd, both)
+
+
+def line(kind: str, color: str, lane_change: str | None) -> MarkSegment:
+    return MarkSegment(0.0, kind, weight='standard', color=color,
+                       width=MARK_WIDTH, lane_change=lane_change)
+
+
+def paint(sec: LaneSection, two_way: bool) -> None:
+    """A solid yellow center line between the two directions, broken white
+    lines between the lanes of one direction and solid white edges."""
+    sec.center.marks = [line('solid', 'yellow', 'none') if two_way
+                        else line('solid', 'white', None)]
+    for side in (sec.left, sec.right):
+        for lane in side[:-1]:
+            lane.outer.marks = [line('broken', 'white', 'both')]
+        if side:
+            side[-1].outer.marks = [line('solid', 'white', None)]
+
+
+def add_turns(sec: LaneSection, tags: dict, fwd: int, bwd: int,
+              both: bool) -> None:
+    """The ``turn:lanes`` values as ``osm:turn`` lane userData. OSM lists
+    the lanes from left to right in their travel direction, which in
+    left-hand traffic is from the outermost lane in."""
+    if both:
+        return
+    for side, count, key in ((sec.left, fwd, 'turn:lanes:forward'),
+                             (sec.right, bwd, 'turn:lanes:backward')):
+        text = tags.get(key)
+        if text is None and fwd + bwd == count:
+            text = tags.get('turn:lanes')
+        values = text.split('|') if text is not None else []
+        if not count or len(values) != count:
+            continue
+        for lane, value in zip(reversed(side), values):
+            lane.attrs['userData'] = (f'<userData code="osm:turn" '
+                                      f'value={quoteattr(value or "none")}/>')
 
 
 def road_offset(tags: dict) -> float:
