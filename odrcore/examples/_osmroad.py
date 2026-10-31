@@ -86,7 +86,9 @@ def hermite(s0: float, p0, p1, t0, t1) -> ParamPoly3:
                       p_range='normalized')
 
 
-def structure(way: dict, length: float) -> str:
+def structure(way: dict, length: float, road_id: str = '') -> str:
+    """The bridge or tunnel ``<objects>`` of a way, or of the road
+    ``road_id`` cut from it."""
     tags = way['tags']
     if tags.get('tunnel'):
         kind = 'tunnel'
@@ -98,7 +100,7 @@ def structure(way: dict, length: float) -> str:
         return ''
     name = tags.get(f'{kind}:name', '')
     return (f'<objects><{kind} s="0.0" length="{length!r}" '
-            f'id="{way["id"]}.{kind}" name={quoteattr(name)} '
+            f'id="{road_id or way["id"]}.{kind}" name={quoteattr(name)} '
             f'type="{typ}"/></objects>')
 
 
