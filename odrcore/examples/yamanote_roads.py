@@ -36,14 +36,28 @@ on either side of the point of the loop closest to the middle of the way,
 in station number order, e.g. ``JY05-JY06``.
 
 The geometry uses the same local tangent plane and geoReference as the track
-map, so the two maps overlay, and the same ``paramPoly3`` fit. The roads are
-flat (z = 0).
+map, so the two maps overlay, and the same ``paramPoly3`` fit.
+
+The height of a node is the ground height from the GSI elevation tiles plus
+the structure offset of the way through it with the smallest magnitude, so
+that a bridge comes down to the ground road it meets, and no more than
+``RAMP_GRADE`` times the distance along the roads from a node of a smaller
+offset. Along a bridge, tunnel, embankment or cutting the offset ramps
+linearly at that grade from those of its end nodes to its own, and a
+passage through a building stays on the ground. A bridge or an
+embankment does not dip below the straight line between its ends, nor
+does a tunnel or a cutting rise above it. The elevation profile is a cubic
+Hermite spline through the vertices and knots at most ``KNOT`` apart;
+``--flat`` skips the tiles and leaves the roads at z = 0. The tiles are
+kept in the directory the environment variable ``GSI_TILE_CACHE`` names,
+``~/.cache/solvcon-gsi`` by default.
 
 Map data (c) OpenStreetMap contributors, ODbL 1.0. The output is a derived
-database under the same license.
+database under the same license. Elevation tiles (c) Geospatial
+Information Authority of Japan, under the GSI terms of use.
 
 Usage: python3 odrcore/examples/yamanote_roads.py [--base YAMANOTE.xodr]
-       OUT.xodr [OVERPASS.json]
+       [--flat] OUT.xodr [OVERPASS.json]
 
 Without OVERPASS.json the ways are fetched from the Overpass API, or from
 the instance that the environment variable ``OVERPASS_URL`` names, and the
@@ -52,7 +66,9 @@ defaults to ``yamanote.xodr`` next to this script.
 """
 
 import argparse
+import heapq
 import json
+import math
 import pathlib
 import re
 import sys
@@ -70,6 +86,8 @@ from odrcore.model import (Boundary, Connection, End, Frame, Header,
 from odrcore.osm import LocalTangentPlane, origin_of
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _gsi import ATTRIBUTION as GSI_ATTRIBUTION  # noqa: E402
+from _gsi import Tiles, height_segment, structure_offset  # noqa: E402
 from _osmroad import (MIN_SPACING, fetch, hermite, loop_chain,  # noqa: E402
                       open_tangents, structure, tangents, thin)
 
@@ -95,6 +113,11 @@ DEFAULT_SPEED = {
 LANE_WIDTH = 3.0
 NARROW_WIDTH = 2.75
 WIDTH_RANGE = (2.0, 5.0)
+# A viaduct of 7 m reaches its height in 50 m.
+RAMP_GRADE = 0.14
+KNOT = 25.0
+# Radii in meters to look for the ground around a hole of the tiles.
+GROUND_SEARCH = (0.0, 10.0, 25.0, 50.0, 100.0)
 # The cosine of the sharpest turn through a node that keeps the heading
 # continuous across it.
 MIN_JOINT_COS = 0.5
@@ -429,6 +452,83 @@ def add_lanes(road: Road, tags: dict) -> None:
         inner = outer
 
 
+def road_offset(tags: dict) -> float:
+    """The structure offset of a road; a passage through a building stays
+    on the ground."""
+    if tags.get('tunnel') == 'building_passage':
+        return 0.0
+    return structure_offset(tags)
+
+
+def node_offsets(m: Map, ways, geo: dict[str, tuple[dict, np.ndarray,
+                                                    list[int]]]
+                 ) -> dict[int, float]:
+    """The structure offset of each road end node: that of the way through
+    it with the smallest magnitude, reduced where a road would have to
+    climb to it from a lower node steeper than ``RAMP_GRADE``."""
+    own: dict[int, float] = {}
+    for way in ways:
+        off = road_offset(way['tags'])
+        for nid in way['nodes']:
+            if abs(off) < abs(own.get(nid, math.inf)):
+                own[nid] = off
+    graph: dict[int, list[tuple[int, float]]] = {}
+    for rid, (_, _, ids) in geo.items():
+        climb = RAMP_GRADE * m.roads[rid].length
+        graph.setdefault(ids[0], []).append((ids[-1], climb))
+        graph.setdefault(ids[-1], []).append((ids[0], climb))
+    size = {nid: abs(own[nid]) for nid in graph}
+    heap = [(v, nid) for nid, v in size.items()]
+    heapq.heapify(heap)
+    while heap:
+        v, nid = heapq.heappop(heap)
+        if v > size[nid]:
+            continue
+        for other, climb in graph[nid]:
+            if v + climb < size[other]:
+                size[other] = v + climb
+                heapq.heappush(heap, (v + climb, other))
+    return {nid: math.copysign(v, own[nid]) for nid, v in size.items()}
+
+
+def elevate(road: Road, ids: list[int], z_node: dict[int, float],
+            off_node: dict[int, float], offset: float, ground) -> None:
+    """Fit the elevation profile through the heights of the end nodes and
+    of the ground plus the structure offset in between, which ramps from
+    those of the end nodes at ``RAMP_GRADE``."""
+    length, full = road.length, abs(offset)
+    a0, a1 = abs(off_node[ids[0]]), abs(off_node[ids[-1]])
+    knots = [g.s0 for g in road.refline.plan] + [length]
+    knots += [v for v in ((full - a0) / RAMP_GRADE,
+                          length - (full - a1) / RAMP_GRADE,
+                          0.5 * (length + (a1 - a0) / RAMP_GRADE))
+              if 0.0 < v < length]
+    knots = sorted(knots)
+    s = [knots[0]]
+    for a, b in zip(knots, knots[1:]):
+        if b - a < 1e-3:
+            continue
+        n = math.ceil((b - a) / KNOT)
+        s += [a + (b - a) * k / n for k in range(1, n + 1)]
+    s = np.array(s, dtype='float64')
+    off = math.copysign(1.0, offset) * np.minimum(
+        full, np.minimum(a0 + RAMP_GRADE * s, a1 + RAMP_GRADE * (length - s)))
+    z = np.array([ground(*road.refline.point(float(v), 0.0)[:2])
+                  for v in s[1:-1]], dtype='float64') + off[1:-1]
+    z = np.concatenate([[z_node[ids[0]]], z, [z_node[ids[-1]]]])
+    # A deck spans a valley and a tube runs under a hill on the straight
+    # line between its ends rather than following the ground.
+    chord = np.interp(s, [0.0, length], [z[0], z[-1]])
+    if offset > 0.0:
+        z = np.maximum(z, chord)
+    elif offset < 0.0:
+        z = np.minimum(z, chord)
+    slope = np.gradient(z, s)
+    road.refline.elevation = PiecewisePoly3([
+        height_segment(s[k], s[k + 1], z[k], z[k + 1], slope[k],
+                       slope[k + 1]) for k in range(len(s) - 1)])
+
+
 def make_road(rid: str, way: dict, xy: np.ndarray, tan: np.ndarray,
               ids: list[int], marked: dict[int, str], loop: Loop) -> Road:
     tags = way['tags']
@@ -455,9 +555,38 @@ def make_road(rid: str, way: dict, xy: np.ndarray, tan: np.ndarray,
     return road
 
 
-def build(data: dict, base: Map) -> tuple[Map, list[str], int]:
+def add_elevation(m: Map, ways,
+                  geo: dict[str, tuple[dict, np.ndarray, list[int]]],
+                  tiles: Tiles, ltp: LocalTangentPlane) -> None:
+    def ground(x: float, y: float) -> float:
+        """The ground height, or the nearest one around a hole of the
+        tiles, such as a river."""
+        for r in GROUND_SEARCH:
+            for a in np.linspace(0.0, 2.0 * np.pi, 8 if r else 1,
+                                 endpoint=False, dtype='float64'):
+                lat, lon, _ = ltp.to_geodetic(x + r * math.cos(a),
+                                              y + r * math.sin(a), 0.0)
+                z = tiles.height(lat, lon)[0]
+                if not math.isnan(z):
+                    return z
+        return 0.0
+
+    off_node = node_offsets(m, ways, geo)
+    z_node = {}
+    for _, xy, ids in geo.values():
+        for k in (0, -1):
+            if ids[k] not in z_node:
+                z_node[ids[k]] = ground(*xy[k]) + off_node[ids[k]]
+    for rid, (way, _, ids) in geo.items():
+        elevate(m.roads[rid], ids, z_node, off_node,
+                road_offset(way['tags']), ground)
+
+
+def build(data: dict, base: Map, tiles: Tiles | None = None
+          ) -> tuple[Map, list[str], int]:
     """The road map, the ids of the roads of one distinct node and the
-    number of ways farther than ``RADIUS`` from the loop."""
+    number of ways farther than ``RADIUS`` from the loop. Without the
+    elevation ``tiles`` the roads are flat."""
     loop = Loop(base)
     ltp = loop.plane
     ways = {}
@@ -515,6 +644,8 @@ def build(data: dict, base: Map) -> tuple[Map, list[str], int]:
     if not m.roads:
         raise ValueError('the Overpass data has no road way')
     link_roads(m, ends)
+    if tiles is not None:
+        add_elevation(m, ways.values(), geo, tiles, ltp)
 
     lo, hi = np.min(corners, axis=0), np.max(corners, axis=0)
     m.header = Header(name='JR East Yamanote Line roads', version='1.0',
@@ -523,6 +654,9 @@ def build(data: dict, base: Map) -> tuple[Map, list[str], int]:
                       north=float(hi[1]), east=float(hi[0]))
     m.header.attrs['userData'] = (
         f'<userData code="source" value="{ATTRIBUTION}"/>')
+    if tiles is not None:
+        m.header.attrs['userData'] += (
+            f'<userData code="source:elevation" value="{GSI_ATTRIBUTION}"/>')
     m.frame = Frame(geo_reference=base.frame.geo_reference)
     m.reindex()
     return m, skipped, outside
@@ -561,6 +695,8 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__.strip().split('\n\n')[0])
     parser.add_argument('--base', type=pathlib.Path, default=BASE_MAP)
+    parser.add_argument('--flat', action='store_true',
+                        help='leave the roads at z = 0 without the tiles')
     parser.add_argument('out', type=pathlib.Path)
     parser.add_argument('overpass', type=pathlib.Path, nargs='?')
     args = parser.parse_args(argv[1:])
@@ -573,7 +709,8 @@ def main(argv: list[str]) -> int:
         cache = args.out.with_suffix('.json')
         cache.write_text(json.dumps(data), 'utf-8')
         print(f'saved the Overpass response to {cache}')
-    m, skipped, outside = build(data, base)
+    tiles = None if args.flat else Tiles()
+    m, skipped, outside = build(data, base, tiles)
     odrcore.dump(m, args.out)
 
     lengths: dict[str, list[float]] = {h: [] for h in HIGHWAYS}
@@ -593,6 +730,11 @@ def main(argv: list[str]) -> int:
     print(f'{sum("." in rid for rid in m.roads)} roads cut from longer '
           f'ways, {links} road links, {len(m.junctions)} junctions with '
           f'{moves} connections')
+    if tiles is not None:
+        z = [road.refline.elevation(s) for road in m.roads.values()
+             for s in np.linspace(0.0, road.length, 5, dtype='float64')]
+        print(f'elevation {min(z):.1f} to {max(z):.1f} m, '
+              f'{tiles.fetched} tiles fetched')
     print(f'left out {outside} ways farther than {RADIUS:g} m')
     if skipped:
         print(f'skipped {len(skipped)} ways with one distinct node: '

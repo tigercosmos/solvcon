@@ -14,6 +14,7 @@ from odrcore.model import RoadLink
 
 EXAMPLES = pathlib.Path(odrcore.__file__).parent / 'examples'
 sys.path.insert(0, str(EXAMPLES))
+import _gsi  # noqa: E402
 import yamanote_roads  # noqa: E402
 
 
@@ -295,6 +296,83 @@ def test_closed_way(crossing):
     for a, b in (('34', '34.1'), ('34.1', '34')):
         assert heading(m.roads[a], 'end') == \
             pytest.approx(heading(m.roads[b], 'start'), abs=1e-9)
+
+
+class SlopedTiles:
+    """A ground plane rising 1 m every 100 m to the north, in place of the
+    GSI tiles."""
+
+    def __init__(self, loop):
+        self.lat0 = loop.plane.to_geodetic(0.0, 0.0, 0.0)[0]
+
+    def height(self, lat, lon):
+        return 20.0 + 1111.0 * (lat - self.lat0), 'stub'
+
+
+@pytest.fixture(scope='module')
+def elevated(base, loop):
+    s_mid = 0.5 * (loop.stop_s[0] + loop.stop_s[1])
+    data, _ = overpass(loop, s_mid, loop.length - 50.0)
+    tiles = SlopedTiles(loop)
+    m, _, _ = yamanote_roads.build(data, base, tiles)
+
+    def ground(road, s):
+        x, y, _ = road.refline.point(s, 0.0)
+        return tiles.height(*loop.plane.to_geodetic(x, y, 0.0)[:2])[0]
+
+    return m, ground
+
+
+def test_flat(built):
+    m, _, _ = built
+    assert all(not road.refline.elevation.segs for road in m.roads.values())
+    assert 'source:elevation' not in m.header.attrs['userData']
+
+
+def test_elevation_meets_at_nodes(elevated):
+    m, ground = elevated
+    for a, b in (('11', '12'), ('12', '13')):
+        ra, rb = m.roads[a], m.roads[b]
+        assert ra.refline.elevation(ra.length) == \
+            pytest.approx(rb.refline.elevation(0.0), abs=1e-9)
+    road = m.roads['11']
+    for s in np.linspace(0.0, road.length, 7, dtype='float64'):
+        assert road.refline.elevation(s) == \
+            pytest.approx(ground(road, s), abs=0.01)
+    assert 'source:elevation' in m.header.attrs['userData']
+
+
+def test_bridge_ramps(elevated):
+    m, ground = elevated
+    road = m.roads['12']
+    elev = road.refline.elevation
+    # The bridge comes down to the ground roads at both ends. At 80 m it is
+    # too short to climb to its full 7 m at the ramp grade, so it peaks in
+    # the middle.
+    grade = yamanote_roads.RAMP_GRADE
+    assert 0.5 * grade * road.length < 7.0
+    for f, rise in ((0.0, 0.0), (0.25, 0.25), (0.5, 0.5), (1.0, 0.0)):
+        s = f * road.length
+        assert elev(s) - ground(road, s) == \
+            pytest.approx(grade * rise * road.length, abs=0.05)
+    for s0, *_ in elev.segs[1:]:
+        assert elev.derivative(s0 - 1e-9) == \
+            pytest.approx(elev.derivative(s0), abs=1e-6)
+
+
+def test_tile_cache(tmp_path):
+    x, y = 29102, 12903
+    path = tmp_path / 'dem5a' / str(_gsi.ZOOM) / str(x) / f'{y}.txt'
+    path.parent.mkdir(parents=True)
+    path.write_text('\n'.join([','.join(['12.5'] * 256)] * 256), 'ascii')
+    n = 2 ** _gsi.ZOOM
+    lon = (x + 0.5) / n * 360.0 - 180.0
+    lat = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * (y + 0.5)
+                                                      / n))))
+    tiles = _gsi.Tiles(tmp_path)
+    assert tiles.height(lat, lon) == (12.5, 'dem5a')
+    # The tile on disk stands in for the server.
+    assert tiles.fetched == 0
 
 
 def test_boxes_cover_buffer(loop):
