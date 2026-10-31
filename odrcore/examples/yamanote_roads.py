@@ -30,10 +30,16 @@ right. The lane counts come from the ``lanes``, ``lanes:forward``,
 tagged with a single lane gets one lane of direction ``both``. The lanes are
 centered on the way. A road also has a bridge or tunnel ``<objects>`` when
 the way is tagged so, and ``<userData>`` with the way id, class, name,
-layer, the traffic signal and crossing nodes on it (``s`` along the road),
-and the ``segment`` of the line it belongs to: the two Outer-loop stations
-on either side of the point of the loop closest to the middle of the way,
-in station number order, e.g. ``JY05-JY06``.
+layer and the ``segment`` of the line it belongs to: the two Outer-loop
+stations on either side of the point of the loop closest to the middle of
+the way, in station number order, e.g. ``JY05-JY06``.
+
+A traffic signal node becomes a dynamic ``<signal>`` for each direction
+whose lanes arrive at it, ``sig<node id>`` on the left edge for the lanes
+along the road and ``sig<node id>r`` on the right edge for those against
+it, with ``-<road id>`` appended when the node is on several roads. A
+crossing node becomes a ``crosswalk`` ``<object>`` ``cw<node id>`` across
+the carriageway of the first road through it.
 
 The geometry uses the same local tangent plane and geoReference as the track
 map, so the two maps overlay, and the same ``paramPoly3`` fit.
@@ -82,7 +88,7 @@ import odrcore
 from odrcore.geom import PiecewisePoly3
 from odrcore.model import (Boundary, Connection, End, Frame, Header,
                            Junction, Lane, LaneSection, Map, Road, RoadLink,
-                           SpeedLimit, boundary_id)
+                           Signal, SpeedLimit, boundary_id)
 from odrcore.osm import LocalTangentPlane, origin_of
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -103,6 +109,10 @@ MAJOR = ('motorway', 'trunk', 'primary', 'secondary', 'tertiary')
 MINOR = ('unclassified', 'residential', 'living_street')
 HIGHWAYS = MAJOR + MINOR + tuple(f'{c}_link' for c in MAJOR)
 NODE_TAGS = {'traffic_signals': 'signal', 'crossing': 'crossing'}
+# The three-light traffic light of the German sign catalog, which OpenDRIVE
+# tools read whatever the country.
+TRAFFIC_LIGHT = '1000001'
+CROSSWALK_LENGTH = 4.0
 # Lanes in each direction when the way has no lane tags.
 DEFAULT_LANES = {'motorway': 2, 'trunk': 2, 'primary': 2}
 DEFAULT_SPEED = {
@@ -414,15 +424,12 @@ def link_roads(m: Map, ends: dict[int, list[tuple[str, End]]]) -> None:
             m.junctions[f'j{nid}'] = direct_junction(m, nid, at)
 
 
-def user_data(way: dict, segment: str,
-              marks: list[tuple[str, float, int]]) -> str:
+def user_data(way: dict, segment: str) -> str:
     tags = way['tags']
     name = tags.get('name:en') or tags.get('name', '')
     items = [('osm:way', str(way['id'])), ('osm:highway', tags['highway']),
              ('osm:name', name), ('osm:layer', tags.get('layer', '0')),
              ('segment', segment)]
-    items += [(f'osm:{kind}', f's={s!r} node={nid}')
-              for kind, s, nid in marks]
     return ''.join(f'<userData code="{code}" value={quoteattr(value)}/>'
                    for code, value in items)
 
@@ -529,8 +536,46 @@ def elevate(road: Road, ids: list[int], z_node: dict[int, float],
                        slope[k + 1]) for k in range(len(s) - 1)])
 
 
+def edges(road: Road) -> tuple[Boundary, Boundary]:
+    """The outer boundaries of the carriageway on the left and the right."""
+    sec = road.sections[0]
+    return (sec.left[-1].outer if sec.left else sec.center,
+            sec.right[-1].outer if sec.right else sec.center)
+
+
+def traffic_lights(road: Road, s: float, nid: int,
+                   shared: bool) -> list[Signal]:
+    """The traffic lights at a signal node, on the outer edge of the lanes
+    of each direction that arrives there: forward lanes on the left in
+    left-hand traffic, backward ones on the right."""
+    sec = road.sections[0]
+    left, right = edges(road)
+    suffix = f'-{road.id}' if shared else ''
+    both = bool(sec.left) and sec.left[0].direction == 'both'
+    out = []
+    if sec.left and s > 0.0:
+        out.append(Signal(f'sig{nid}{suffix}', road, s, left.t(s),
+                          type=TRAFFIC_LIGHT, country='JPN', dynamic=True,
+                          orientation='+', validity=[(1, len(sec.left))]))
+    if (sec.right or both) and s < road.length:
+        valid = (-1, -len(sec.right)) if sec.right else (1, 1)
+        out.append(Signal(f'sig{nid}r{suffix}', road, s, right.t(s),
+                          type=TRAFFIC_LIGHT, country='JPN', dynamic=True,
+                          orientation='-', validity=[valid]))
+    return out
+
+
+def crosswalk(road: Road, s: float, nid: int) -> str:
+    left, right = edges(road)
+    return (f'<object id="cw{nid}" type="crosswalk" s="{s!r}" '
+            f't="{0.5 * (left.t(s) + right.t(s))!r}" zOffset="0.0" '
+            f'orientation="none" hdg="0.0" length="{CROSSWALK_LENGTH!r}" '
+            f'width="{left.t(s) - right.t(s)!r}"/>')
+
+
 def make_road(rid: str, way: dict, xy: np.ndarray, tan: np.ndarray,
-              ids: list[int], marked: dict[int, str], loop: Loop) -> Road:
+              ids: list[int], marked: dict[int, str],
+              carriers: dict[int, list[str]], loop: Loop) -> Road:
     tags = way['tags']
     road = Road(id=rid, name=tags.get('name:en') or tags.get('name', ''),
                 rule='LHT')
@@ -544,14 +589,23 @@ def make_road(rid: str, way: dict, xy: np.ndarray, tan: np.ndarray,
     if ids[-1] in marked:
         marks.append((marked[ids[-1]], s, ids[-1]))
     road.length = s
-
-    objects = structure(way, s, rid)
-    if objects:
-        road.attrs['_unknown'] = objects
-    middle = road.refline.point(0.5 * s, 0.0)[:2]
-    road.attrs['userData'] = user_data(
-        way, loop.segment(loop.project(middle)), marks)
     add_lanes(road, tags)
+
+    objects = ''
+    for kind, s, nid in marks:
+        if kind == 'signal':
+            road.signals += traffic_lights(road, s, nid,
+                                           len(carriers[nid]) > 1)
+        elif carriers[nid][0] == rid:
+            objects += crosswalk(road, s, nid)
+    # The schema puts <object> before <bridge> and <tunnel>.
+    objects += structure(way, road.length, rid).removeprefix(
+        '<objects>').removesuffix('</objects>')
+    if objects:
+        road.attrs['_unknown'] = f'<objects>{objects}</objects>'
+    middle = road.refline.point(0.5 * road.length, 0.0)[:2]
+    road.attrs['userData'] = user_data(
+        way, loop.segment(loop.project(middle)))
     return road
 
 
@@ -636,14 +690,22 @@ def build(data: dict, base: Map, tiles: Tiles | None = None
             ends.setdefault(ids[-1], []).append((rid, 'end'))
         chains.append((chain, way['nodes'][0] == way['nodes'][-1]))
     tan = joint_tangents(geo, ends, chains)
+    carriers: dict[int, list[str]] = {}
+    for rid, (_, _, ids) in geo.items():
+        for nid in dict.fromkeys(ids):
+            if nid in marked:
+                carriers.setdefault(nid, []).append(rid)
 
     m, corners = Map(), []
     for rid, (way, xy, ids) in geo.items():
-        m.roads[rid] = make_road(rid, way, xy, tan[rid], ids, marked, loop)
+        m.roads[rid] = make_road(rid, way, xy, tan[rid], ids, marked,
+                                 carriers, loop)
         corners += [xy.min(axis=0), xy.max(axis=0)]
     if not m.roads:
         raise ValueError('the Overpass data has no road way')
     link_roads(m, ends)
+    m.signals = {sig.id: sig for road in m.roads.values()
+                 for sig in road.signals}
     if tiles is not None:
         add_elevation(m, ways.values(), geo, tiles, ltp)
 
@@ -735,6 +797,9 @@ def main(argv: list[str]) -> int:
              for s in np.linspace(0.0, road.length, 5, dtype='float64')]
         print(f'elevation {min(z):.1f} to {max(z):.1f} m, '
               f'{tiles.fetched} tiles fetched')
+    crosswalks = sum(r.attrs.get('_unknown', '').count('"crosswalk"')
+                     for r in m.roads.values())
+    print(f'{len(m.signals)} traffic lights, {crosswalks} crosswalks')
     print(f'left out {outside} ways farther than {RADIUS:g} m')
     if skipped:
         print(f'skipped {len(skipped)} ways with one distinct node: '
