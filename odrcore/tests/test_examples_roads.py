@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import odrcore
+from odrcore.model import RoadLink
 
 EXAMPLES = pathlib.Path(odrcore.__file__).parent / 'examples'
 sys.path.insert(0, str(EXAMPLES))
@@ -34,6 +35,24 @@ def loop_frame(loop, s):
     return p, np.array([-tan[1], tan[0]], dtype='float64'), tan
 
 
+def on_ellipsoid(loop, local):
+    """The OSM coordinates of the plane points and the points they map
+    back to."""
+    geo = {nid: dict(zip(('lat', 'lon'), loop.plane.to_geodetic(*xy, 0.0)))
+           for nid, xy in local.items()}
+    # The generator drops the height, so the nodes land on the ellipsoid
+    # slightly off the tangent plane.
+    local = {nid: np.array(loop.plane.to_local(g['lat'], g['lon'], 0.0)[:2],
+                           dtype='float64')
+             for nid, g in geo.items()}
+    return geo, local
+
+
+def osm_way(geo, wid, ids, **tags):
+    return {'type': 'way', 'id': wid, 'nodes': ids,
+            'geometry': [geo[nid] for nid in ids], 'tags': tags}
+
+
 def overpass(loop, s_mid, s_wrap):
     """Ways 100 m beside the loop at ``s_mid``: a two-way residential way,
     a straight one-way primary with three lanes and a signal in the middle,
@@ -54,17 +73,10 @@ def overpass(loop, s_mid, s_wrap):
     p, nrm, tan = loop_frame(loop, s_wrap)
     local[8] = p + 80.0 * nrm - 20.0 * tan
     local[9] = p + 80.0 * nrm + 20.0 * tan
-    geo = {nid: dict(zip(('lat', 'lon'), loop.plane.to_geodetic(*xy, 0.0)))
-           for nid, xy in local.items()}
-    # The generator drops the height, so the nodes land on the ellipsoid
-    # slightly off the tangent plane.
-    local = {nid: np.array(loop.plane.to_local(g['lat'], g['lon'], 0.0)[:2],
-                           dtype='float64')
-             for nid, g in geo.items()}
+    geo, local = on_ellipsoid(loop, local)
 
     def way(wid, ids, **tags):
-        return {'type': 'way', 'id': wid, 'nodes': ids,
-                'geometry': [geo[nid] for nid in ids], 'tags': tags}
+        return osm_way(geo, wid, ids, **tags)
 
     elements = [
         way(11, [1, 2, 3], highway='residential', name='Sakura-dori'),
@@ -167,10 +179,122 @@ def test_user_data(built):
     assert data['osm:layer'] == '1'
     s = float(re.match(r's=(\S+) node=4$', data['osm:signal'])
               .group(1))
-    assert s == pytest.approx(math.dist(local[3], local[4]), abs=1e-6)
+    at = m.roads['12'].refline.point(s, 0.0)[:2]
+    assert math.dist(at, local[4]) < 1e-6
     assert '<bridge ' in m.roads['12'].attrs['_unknown']
     assert user_data(m.roads['13'])['osm:name'] == 'Ginza Avenue'
     assert user_data(m.roads['11'])['osm:name'] == 'Sakura-dori'
+
+
+@pytest.fixture(scope='module')
+def crossing(base, loop):
+    """Way 31 bends through node 42, where one-way way 32 leaves it. Way 33
+    runs into the end of way 32 head to head, and starts where way 35, a
+    single lane for both directions, starts too. Way 34 is a roundabout."""
+    p, nrm, tan = loop_frame(loop, 0.5 * (loop.stop_s[2] + loop.stop_s[3]))
+    o = p + 100.0 * nrm
+    angles = np.linspace(0.0, 2.0 * np.pi, 8, endpoint=False,
+                         dtype='float64')
+    ring = {60 + k: o + 120.0 * tan + 30.0 * (np.cos(a) * tan
+                                              + np.sin(a) * nrm)
+            for k, a in enumerate(angles)}
+    geo, _ = on_ellipsoid(loop, {
+        41: o - 60.0 * tan + 10.0 * nrm, 42: o,
+        43: o + 60.0 * tan + 10.0 * nrm, 44: o - 50.0 * nrm,
+        46: o - 120.0 * nrm + 20.0 * tan, 50: o - 190.0 * nrm + 50.0 * tan,
+        **ring})
+    elements = [
+        osm_way(geo, 31, [41, 42, 43], highway='residential'),
+        osm_way(geo, 32, [42, 44], highway='residential', oneway='yes'),
+        osm_way(geo, 33, [46, 44], highway='primary',
+                **{'lanes:forward': '2', 'lanes:backward': '1'}),
+        osm_way(geo, 34, [*ring, 60], highway='residential',
+                junction='roundabout'),
+        osm_way(geo, 35, [46, 50], highway='residential', lanes='1'),
+    ]
+    m, skipped, _ = yamanote_roads.build({'elements': elements}, base)
+    assert skipped == []
+    return m
+
+
+def heading(road, end):
+    return road.refline.pose(road.length if end == 'end' else 0.0)[3]
+
+
+def lane_links(road):
+    return {ln.odr_id: (ln.link.predecessors, ln.link.successors)
+            for ln in road.lanes()}
+
+
+def test_validate(built, crossing):
+    assert built[0].validate() == []
+    assert crossing.validate() == []
+
+
+def test_split_through_way(crossing):
+    m = crossing
+    assert sorted(m.roads) == ['31', '31.1', '32', '33', '34', '34.1', '35']
+    assert user_data(m.roads['31.1'])['osm:way'] == '31'
+    assert m.roads['31'].successor == RoadLink('junction', 'j42')
+    assert m.roads['31.1'].predecessor == RoadLink('junction', 'j42')
+    assert m.roads['32'].predecessor == RoadLink('junction', 'j42')
+    assert m.roads['31'].predecessor is None
+    # The way bends at the junction node but its two pieces join smoothly.
+    assert heading(m.roads['31'], 'end') == \
+        pytest.approx(heading(m.roads['31.1'], 'start'), abs=1e-9)
+
+
+def test_direct_junction(crossing):
+    m = crossing
+    junction = m.junctions['j42']
+    assert junction.type == 'direct'
+    moves = sorted((c.incoming_road, c.linked_road, c.contact_point,
+                    c.lane_links) for c in junction.connections)
+    # Nothing comes out of the one-way way 32, which leaves the junction.
+    assert moves == [('31', '31.1', 'start', [(1, 1)]),
+                     ('31', '32', 'start', [(1, 1)]),
+                     ('31.1', '31', 'end', [(-1, -1)]),
+                     ('31.1', '32', 'start', [(-1, 1)])]
+    entering = m.roads['31'].sections[0].lane(1)
+    assert sorted(ln.id for ln in m.successors(entering)) == \
+        [('31.1', 0, 1), ('32', 0, 1)]
+
+
+def test_head_to_head(crossing):
+    m = crossing
+    assert m.roads['32'].successor == RoadLink('road', '33', 'end')
+    assert m.roads['33'].successor == RoadLink('road', '32', 'end')
+    assert lane_links(m.roads['32']) == {1: ([], [-1])}
+    # Lane 1 of way 33 would enter the one-way way 32 against its
+    # direction, and lane 2 has no counterpart.
+    assert lane_links(m.roads['33'])[-1][1] == [1]
+    assert lane_links(m.roads['33'])[1][1] == []
+    assert lane_links(m.roads['33'])[2][1] == []
+    lane = m.roads['32'].sections[0].lane(1)
+    assert [ln.id for ln in m.successors(lane)] == [('33', 0, -1)]
+    turn = heading(m.roads['32'], 'end') - heading(m.roads['33'], 'end')
+    assert math.cos(turn) == pytest.approx(-1.0, abs=1e-12)
+
+
+def test_start_to_start(crossing):
+    m = crossing
+    assert m.roads['33'].predecessor == RoadLink('road', '35', 'start')
+    assert m.roads['35'].predecessor == RoadLink('road', '33', 'start')
+    # The lane for both directions takes the innermost lane each way.
+    assert lane_links(m.roads['35']) == {1: ([-1, 1], [])}
+    assert lane_links(m.roads['33'])[-1][0] == [1]
+    assert lane_links(m.roads['33'])[1][0] == [1]
+    assert lane_links(m.roads['33'])[2][0] == []
+
+
+def test_closed_way(crossing):
+    m = crossing
+    assert m.roads['34'].successor == RoadLink('road', '34.1', 'start')
+    assert m.roads['34.1'].successor == RoadLink('road', '34', 'start')
+    assert lane_links(m.roads['34']) == {1: ([1], [1])}
+    for a, b in (('34', '34.1'), ('34.1', '34')):
+        assert heading(m.roads[a], 'end') == \
+            pytest.approx(heading(m.roads[b], 'start'), abs=1e-9)
 
 
 def test_boxes_cover_buffer(loop):

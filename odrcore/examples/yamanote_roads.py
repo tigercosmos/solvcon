@@ -10,10 +10,18 @@ The search area follows the Outer loop of the track map that
 ``HIGHWAYS`` classes in the ``CELL`` squares around the loop reference line
 (its ``around`` filter returns nothing or hangs), and a way is kept when
 one of its nodes is within ``RADIUS`` of the line. A way is kept whole, not
-clipped at the edge of the buffer. Each way becomes one road, with the OSM
-way id as the road id and no road links or junctions. Ways that meet share
-a node, so their end points coincide, but each way is fitted on its own and
-the heading may kink where they meet.
+clipped at the edge of the buffer.
+
+A way is split into roads at every interior node that another kept way
+also uses or that the way visits again, and a piece that would start and
+end at one node is split in the middle. The first piece takes the OSM way
+id as the road id, the others ``<way id>.<k>``. Where exactly two road ends
+meet they are linked as predecessor and successor, with lane links from
+the lanes that arrive to the lanes that leave, innermost first. Where three
+or more meet they join a direct junction ``j<node id>`` with a connection
+for every move from one road to another that some lane can make. The
+heading is continuous where a road continues into one other: the only other
+road end at the node, or the next piece of the same way.
 
 A road carries left-hand-traffic ``driving`` lanes: the ones running along
 the way on the left (positive ids), the ones running against it on the
@@ -56,8 +64,9 @@ import numpy as np
 
 import odrcore
 from odrcore.geom import PiecewisePoly3
-from odrcore.model import (Boundary, Frame, Header, Lane, LaneSection, Map,
-                           Road, SpeedLimit, boundary_id)
+from odrcore.model import (Boundary, Connection, End, Frame, Header,
+                           Junction, Lane, LaneSection, Map, Road, RoadLink,
+                           SpeedLimit, boundary_id)
 from odrcore.osm import LocalTangentPlane, origin_of
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -86,6 +95,9 @@ DEFAULT_SPEED = {
 LANE_WIDTH = 3.0
 NARROW_WIDTH = 2.75
 WIDTH_RANGE = (2.0, 5.0)
+# The cosine of the sharpest turn through a node that keeps the heading
+# continuous across it.
+MIN_JOINT_COS = 0.5
 MPH = 1.609344
 RETRY_PAUSE = 60.0
 SERVER_TIMEOUT = 180.0
@@ -261,11 +273,122 @@ def vertices(way: dict, ltp: LocalTangentPlane,
     return xy[idx], [ids[i] for i in idx]
 
 
-def way_tangents(xy: np.ndarray, closed: bool) -> np.ndarray:
-    if closed and len(xy) > 3:
-        tan = tangents(xy[:-1])
-        return np.vstack([tan, tan[:1]])
-    return open_tangents(xy)
+def pieces(way: dict, uses: dict[int, int]) -> list[tuple[int, int]]:
+    """The ``(first, last)`` node indices of the pieces of a way: cut at
+    every interior node another way uses or this way visits again, and in
+    the middle of a piece that would start and end at one node."""
+    nodes = way['nodes']
+    visits: dict[int, int] = {}
+    for nid in nodes:
+        visits[nid] = visits.get(nid, 0) + 1
+    cuts = [0] + [i for i in range(1, len(nodes) - 1)
+                  if uses[nodes[i]] > 1 or visits[nodes[i]] > 1]
+    cuts.append(len(nodes) - 1)
+    out = []
+    for a, b in zip(cuts, cuts[1:]):
+        if nodes[a] == nodes[b] and b - a > 1:
+            out += [(a, (a + b) // 2), ((a + b) // 2, b)]
+        else:
+            out.append((a, b))
+    return out
+
+
+def joint_tangents(geo: dict[str, tuple[dict, np.ndarray, list[int]]],
+                   ends: dict[int, list[tuple[str, End]]],
+                   chains: list[tuple[list[str], bool]]
+                   ) -> dict[str, np.ndarray]:
+    """The vertex tangents of each road. At an end that continues into one
+    other road end, the only other one at the node or the next piece of the
+    same way, the tangent is that of the polyline through both roads."""
+    partner: dict[tuple[str, End], tuple[str, End]] = {}
+    for at in ends.values():
+        if len(at) == 2 and at[0][0] != at[1][0]:
+            partner[at[0]], partner[at[1]] = at[1], at[0]
+    for chain, closed in chains:
+        pairs = list(zip(chain, chain[1:]))
+        if closed and len(chain) > 1:
+            pairs.append((chain[-1], chain[0]))
+        for a, b in pairs:
+            if geo[a][2][-1] == geo[b][2][0]:
+                partner.setdefault((a, 'end'), (b, 'start'))
+                partner.setdefault((b, 'start'), (a, 'end'))
+
+    tan = {rid: open_tangents(xy) for rid, (_, xy, _) in geo.items()}
+    for (rid, end), (oid, oend) in partner.items():
+        xy, oxy = geo[rid][1], geo[oid][1]
+        beyond = oxy[1] if oend == 'start' else oxy[-2]
+        three = [xy[-2], xy[-1], beyond] if end == 'end' \
+            else [beyond, xy[0], xy[1]]
+        three = np.array(three, dtype='float64')
+        d0, d1 = three[1] - three[0], three[2] - three[1]
+        # Past a sharp turn the shared tangent would loop the shorter
+        # segment, so both ends keep their own chords.
+        if d0 @ d1 > MIN_JOINT_COS * np.hypot(*d0) * np.hypot(*d1):
+            tan[rid][-1 if end == 'end' else 0] = tangents(three)[1]
+    return tan
+
+
+def lanes_at(road: Road, end: End) -> tuple[list[int], list[int]]:
+    """The ids of the lanes that arrive at ``end`` of the road and of those
+    that leave from it, innermost first."""
+    sec = road.sections[0]
+    fwd = [ln.odr_id for ln in sec.left]
+    bwd = [ln.odr_id for ln in sec.right]
+    if sec.left and sec.left[0].direction == 'both':
+        bwd = fwd
+    return (fwd, bwd) if end == 'end' else (bwd, fwd)
+
+
+def add_lane_link(road: Road, odr_id: int, end: End, other: int) -> None:
+    link = road.sections[0].lane(odr_id).link
+    ids = link.successors if end == 'end' else link.predecessors
+    if other not in ids:
+        ids.append(other)
+
+
+def set_road_link(road: Road, end: End, link: RoadLink) -> None:
+    if end == 'end':
+        road.successor = link
+    else:
+        road.predecessor = link
+
+
+def link_pair(m: Map, here: tuple[str, End], there: tuple[str, End]) -> None:
+    (rid, end), (oid, oend) = here, there
+    road, other = m.roads[rid], m.roads[oid]
+    set_road_link(road, end, RoadLink('road', oid, oend))
+    set_road_link(other, oend, RoadLink('road', rid, end))
+    arrive, leave = lanes_at(road, end)
+    o_arrive, o_leave = lanes_at(other, oend)
+    for a, b in list(zip(arrive, o_leave)) + list(zip(leave, o_arrive)):
+        add_lane_link(road, a, end, b)
+        add_lane_link(other, b, oend, a)
+
+
+def direct_junction(m: Map, nid: int,
+                    at: list[tuple[str, End]]) -> Junction:
+    """A direct junction with a connection for every move from one road end
+    to the end of another road that a lane can make."""
+    junction = Junction(f'j{nid}', type='direct')
+    for rid, end in at:
+        set_road_link(m.roads[rid], end, RoadLink('junction', junction.id))
+        arrive = lanes_at(m.roads[rid], end)[0]
+        for oid, oend in at:
+            leave = lanes_at(m.roads[oid], oend)[1]
+            if oid == rid or not arrive or not leave:
+                continue
+            junction.connections.append(Connection(
+                str(len(junction.connections)), rid, linked_road=oid,
+                contact_point=oend, lane_links=list(zip(arrive, leave))))
+    return junction
+
+
+def link_roads(m: Map, ends: dict[int, list[tuple[str, End]]]) -> None:
+    for nid, at in ends.items():
+        if len(at) == 2 and at[0][0] != at[1][0]:
+            link_pair(m, *at)
+        elif len(at) > 2:
+            m.junctions[f'j{nid}'] = direct_junction(m, nid, at)
 
 
 def user_data(way: dict, segment: str,
@@ -306,14 +429,11 @@ def add_lanes(road: Road, tags: dict) -> None:
         inner = outer
 
 
-def make_road(way: dict, xy: np.ndarray, ids: list[int],
-              marked: dict[int, str], loop: Loop) -> Road:
+def make_road(rid: str, way: dict, xy: np.ndarray, tan: np.ndarray,
+              ids: list[int], marked: dict[int, str], loop: Loop) -> Road:
     tags = way['tags']
-    rid = str(way['id'])
     road = Road(id=rid, name=tags.get('name:en') or tags.get('name', ''),
                 rule='LHT')
-    closed = way['nodes'][0] == way['nodes'][-1]
-    tan = way_tangents(xy, closed)
     s, marks = 0.0, []
     for k in range(len(xy) - 1):
         if ids[k] in marked:
@@ -321,11 +441,11 @@ def make_road(way: dict, xy: np.ndarray, ids: list[int],
         geom = hermite(s, xy[k], xy[k + 1], tan[k], tan[k + 1])
         road.refline.plan.append(geom)
         s += geom.length
-    if ids[-1] in marked and not closed:
+    if ids[-1] in marked:
         marks.append((marked[ids[-1]], s, ids[-1]))
     road.length = s
 
-    objects = structure(way, s)
+    objects = structure(way, s, rid)
     if objects:
         road.attrs['_unknown'] = objects
     middle = road.refline.point(0.5 * s, 0.0)[:2]
@@ -336,7 +456,7 @@ def make_road(way: dict, xy: np.ndarray, ids: list[int],
 
 
 def build(data: dict, base: Map) -> tuple[Map, list[str], int]:
-    """The road map, the ids of the ways of one distinct node and the
+    """The road map, the ids of the roads of one distinct node and the
     number of ways farther than ``RADIUS`` from the loop."""
     loop = Loop(base)
     ltp = loop.plane
@@ -364,20 +484,38 @@ def build(data: dict, base: Map) -> tuple[Map, list[str], int]:
     for way in ways.values():
         for nid in set(way['nodes']):
             uses[nid] = uses.get(nid, 0) + 1
+    cut = {way['id']: pieces(way, uses) for way in ways.values()}
     pinned = {n for n, c in uses.items() if c > 1} | set(marked)
+    pinned |= {way['nodes'][i] for way in ways.values()
+               for span in cut[way['id']] for i in span}
 
-    m, skipped, corners = Map(), [], []
+    geo, chains, skipped = {}, [], []
+    ends: dict[int, list[tuple[str, End]]] = {}
     for way in ways.values():
-        xy, ids = vertices(way, ltp, pinned)
-        if len(xy) < 2:
-            skipped.append(str(way['id']))
-            continue
-        road = make_road(way, xy, ids, marked, loop)
-        m.roads[road.id] = road
-        corners += [xy.min(axis=0), xy.max(axis=0)]
+        chain = []
+        for k, (a, b) in enumerate(cut[way['id']]):
+            rid = f'{way["id"]}.{k}' if k else str(way['id'])
+            piece = dict(way, nodes=way['nodes'][a:b + 1],
+                         geometry=way['geometry'][a:b + 1])
+            xy, ids = vertices(piece, ltp, pinned)
+            if len(xy) < 2:
+                skipped.append(rid)
+                continue
+            geo[rid] = (way, xy, ids)
+            chain.append(rid)
+            ends.setdefault(ids[0], []).append((rid, 'start'))
+            ends.setdefault(ids[-1], []).append((rid, 'end'))
+        chains.append((chain, way['nodes'][0] == way['nodes'][-1]))
+    tan = joint_tangents(geo, ends, chains)
 
+    m, corners = Map(), []
+    for rid, (way, xy, ids) in geo.items():
+        m.roads[rid] = make_road(rid, way, xy, tan[rid], ids, marked, loop)
+        corners += [xy.min(axis=0), xy.max(axis=0)]
     if not m.roads:
         raise ValueError('the Overpass data has no road way')
+    link_roads(m, ends)
+
     lo, hi = np.min(corners, axis=0), np.max(corners, axis=0)
     m.header = Header(name='JR East Yamanote Line roads', version='1.0',
                       date='2026-10-31', vendor='solvcon odrcore',
@@ -448,6 +586,13 @@ def main(argv: list[str]) -> int:
                   f'{sum(of_class) / 1000.0:.3f} km')
     total = sum(r.length for r in m.roads.values())
     print(f'total: {len(m.roads)} roads, {total / 1000.0:.3f} km')
+    links = sum(link is not None and link.element_type == 'road'
+                for r in m.roads.values()
+                for link in (r.predecessor, r.successor)) // 2
+    moves = sum(len(j.connections) for j in m.junctions.values())
+    print(f'{sum("." in rid for rid in m.roads)} roads cut from longer '
+          f'ways, {links} road links, {len(m.junctions)} junctions with '
+          f'{moves} connections')
     print(f'left out {outside} ways farther than {RADIUS:g} m')
     if skipped:
         print(f'skipped {len(skipped)} ways with one distinct node: '
