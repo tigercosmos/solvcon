@@ -223,7 +223,7 @@ class TestBatched:
     def stations(self, lines):
         owner, s = [], []
         for k, line in enumerate(lines):
-            for v in np.linspace(0.0, line.length, 23):
+            for v in np.linspace(0.0, line.length, 23, dtype='float64'):
                 owner.append(k)
                 s.append(v)
         return (np.array(owner, dtype='int64'),
@@ -244,7 +244,7 @@ class TestBatched:
     def test_refline_points_match_point(self):
         lines = self.lines()
         owner, s = self.stations(lines)
-        t = np.linspace(-4.0, 4.0, len(s))
+        t = np.linspace(-4.0, 4.0, len(s), dtype='float64')
         got = refline_points(lines, owner, s, t)
         want = [lines[k].point(v, w) for k, v, w in zip(owner, s, t)]
         np.testing.assert_allclose(got, want, rtol=0.0, atol=1e-10)
