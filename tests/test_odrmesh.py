@@ -120,8 +120,23 @@ class TestRoadRibbon:
                  straight('c', 0.0, 0.0, 0.0, 30.0)]
         lo, hi = carriageway(roads, np.array([0, 1, 2], dtype='int64'),
                              np.full(3, 3.0, dtype='float64'))
+        # The road without lanes collapses onto its reference line, the
+        # middle a half_width slab is centered on.
         np.testing.assert_allclose(lo, [-5.5, -1.5, 0.0])
         np.testing.assert_allclose(hi, [4.0, 1.5, 0.0])
+
+    def test_a_road_without_lanes_draws_only_with_a_half_width(self):
+        bare = straight('c', 0.0, 0.0, 0.0, 30.0)
+        road = laned('a', 40.0, 20.0, 0.0, [2.0], [2.0])
+        ndcrd, clnds = road_ribbons([bare, road], spacing=10.0)
+        alone = road_ribbon(road, spacing=10.0)
+        np.testing.assert_array_equal(ndcrd, alone[0])
+        np.testing.assert_array_equal(clnds, alone[1])
+        assert road_ribbon(bare)[1].shape == (0, 8)
+        ndcrd, clnds = road_ribbon(bare, spacing=10.0, half_width=1.5)
+        assert len(clnds) == 3
+        volumes = [hex_volume(ndcrd, cell) for cell in clnds]
+        np.testing.assert_allclose(volumes, 10.0 * 3.0 * 0.3)
 
     def test_one_road_is_an_open_slab_across_its_lanes(self):
         road = laned('a', 0.0, 25.0, 0.5, [3.5], [3.0, 3.0], grade=0.02)
