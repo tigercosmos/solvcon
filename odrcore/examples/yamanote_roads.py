@@ -804,12 +804,22 @@ def steepest(m: Map, count: int = 5) -> list[tuple[float, Road]]:
     return out[:count]
 
 
+def busy(exc: Exception) -> bool:
+    """Whether a failed fetch is worth a retry: Overpass is overloaded or
+    the request timed out, while connecting or while reading."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (429, 502, 503, 504)
+    if isinstance(exc, urllib.error.URLError):
+        return isinstance(exc.reason, TimeoutError)
+    return isinstance(exc, TimeoutError)
+
+
 def fetch_politely(text: str) -> dict:
     """Fetch, and once more after a pause when Overpass is busy."""
     try:
         return fetch(text, CLIENT_TIMEOUT)
-    except (urllib.error.HTTPError, TimeoutError) as exc:
-        if getattr(exc, 'code', 504) not in (429, 502, 503, 504):
+    except (urllib.error.URLError, TimeoutError) as exc:
+        if not busy(exc):
             raise
         print(f'Overpass failed ({exc}), retrying in {RETRY_PAUSE:g} s')
         time.sleep(RETRY_PAUSE)

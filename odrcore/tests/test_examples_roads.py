@@ -6,6 +6,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import urllib.error
 
 import numpy as np
 import pytest
@@ -563,6 +564,34 @@ def test_marks_roundtrip(built, tmp_path):
     for rid, road in m.roads.items():
         assert paint(back.roads[rid]) == paint(road)
         assert turns(back.roads[rid]) == turns(road)
+
+
+@pytest.mark.parametrize('error', [
+    urllib.error.URLError(TimeoutError('timed out')),
+    TimeoutError('timed out'),
+    urllib.error.HTTPError('', 504, 'Gateway Timeout', {}, None)])
+def test_fetch_retries_a_timeout(monkeypatch, error):
+    calls = []
+
+    def fetch(text, timeout):
+        calls.append(text)
+        if len(calls) == 1:
+            raise error
+        return {'elements': []}
+
+    monkeypatch.setattr(yamanote_roads, 'fetch', fetch)
+    monkeypatch.setattr(yamanote_roads.time, 'sleep', lambda _: None)
+    assert yamanote_roads.fetch_politely('q') == {'elements': []}
+    assert calls == ['q', 'q']
+
+
+def test_fetch_gives_up_on_a_refusal(monkeypatch):
+    def fetch(text, timeout):
+        raise urllib.error.URLError(ConnectionRefusedError('refused'))
+
+    monkeypatch.setattr(yamanote_roads, 'fetch', fetch)
+    with pytest.raises(urllib.error.URLError):
+        yamanote_roads.fetch_politely('q')
 
 
 def test_boxes_cover_buffer(loop):
