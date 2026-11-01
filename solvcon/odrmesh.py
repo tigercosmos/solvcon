@@ -83,7 +83,7 @@ def carriageway(roads: Sequence[Road], owner: np.ndarray,
                 s: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return the lowest and the highest lateral offset ``t`` of the lane
     boundaries of ``roads[owner[i]]`` at ``s[i]``: its right and left edge.
-    A road without lanes has no width."""
+    A road without lanes has no width: both are 0, its reference line."""
     lo, hi = np.zeros_like(s), np.zeros_like(s)
     laned = [k for k, road in enumerate(roads) if road.sections]
     renum = np.full(len(roads), -1, dtype='int64')
@@ -121,7 +121,12 @@ def road_ribbons(roads: Sequence[Road], spacing: float = 10.0,
     """Return the node and hexahedron arrays of an open slab along every
     road of ``roads``, one after the other: across the carriageway from
     :func:`carriageway`, or ``half_width`` to either side of its middle,
-    with the top on the road surface and ``thickness`` below it."""
+    with the top on the road surface and ``thickness`` below it. A road
+    without lane boundaries has no carriageway and is left out, unless
+    ``half_width`` is given to center its slab on the reference line."""
+    if half_width is None:
+        roads = [road for road in roads
+                 if any(sec.center is not None for sec in road.sections)]
     if not roads:
         return (np.empty((0, 3), dtype='float64'),
                 np.empty((0, 8), dtype='int32'))
