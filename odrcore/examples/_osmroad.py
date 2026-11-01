@@ -4,8 +4,7 @@
 """
 The parts the OpenStreetMap example generators share: the Overpass fetch,
 the vertex thinning, the Hermite fit of a polyline into normalized
-``paramPoly3`` segments, the bridge or tunnel ``<objects>`` of a way and the
-road chain of a Yamanote Line loop.
+``paramPoly3`` segments and the bridge or tunnel ``<objects>`` of a way.
 """
 
 import json
@@ -18,7 +17,6 @@ from xml.sax.saxutils import quoteattr
 import numpy as np
 
 from odrcore.geom import ParamPoly3
-from odrcore.model import Map, Road
 
 OVERPASS_URL = os.environ.get('OVERPASS_URL',
                               'https://overpass-api.de/api/interpreter')
@@ -108,16 +106,5 @@ def structure(way: dict, length: float, road_id: str = '') -> str:
     return (f'<objects><{kind} s="0.0" length="{length!r}" '
             f'id="{road_id or way["id"]}.{kind}" name={quoteattr(name)} '
             f'type="{typ}"/></objects>')
-
-
-def loop_chain(m: Map, label: str) -> list[Road]:
-    """The roads of one Yamanote Line loop in successor order."""
-    first = next(r for r in m.roads.values() if r.name.startswith(label))
-    chain, road = [], first
-    while True:
-        chain.append(road)
-        road = m.roads[road.successor.element_id]
-        if road is first:
-            return chain
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:

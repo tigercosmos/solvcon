@@ -112,8 +112,7 @@ def built(loop):
 
 
 def user_data(obj):
-    return dict(re.findall(r'code="([^"]+)" value="([^"]*)"',
-                           obj.attrs.get('userData', '')))
+    return dict(odrcore.parse.user_data(obj.attrs.get('userData')))
 
 
 def test_lanes(built):

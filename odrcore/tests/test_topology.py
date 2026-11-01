@@ -6,7 +6,8 @@ import pathlib
 import pytest
 
 from odrcore import parse
-from odrcore.model import RoadLink
+from odrcore.model import Map, Road, RoadLink
+from odrcore.topology import loop_chain
 from odrcore.tests.test_model import two_by_two
 
 FIXTURES = pathlib.Path(__file__).parent / 'fixtures'
@@ -134,5 +135,34 @@ class TestJunction:
     def test_conflicting_is_a_stub(self, m):
         with pytest.raises(NotImplementedError):
             m.links.conflicting(m.lanes[('3', 0, -1)])
+
+
+class TestLoopChain:
+
+    @staticmethod
+    def ring(ids, label):
+        roads = [Road(rid, name=f'{label} {rid}') for rid in ids]
+        for k, road in enumerate(roads):
+            nxt = roads[(k + 1) % len(roads)]
+            road.successor = RoadLink('road', nxt.id, 'start')
+        return roads
+
+    def test_follows_successors_back_to_the_first(self):
+        m = Map(roads={r.id: r for r in self.ring(['b', 'c', 'a'], 'Outer')
+                       + self.ring(['x', 'y'], 'Inner')})
+        assert [r.id for r in loop_chain(m, 'Outer')] == ['b', 'c', 'a']
+        assert [r.id for r in loop_chain(m, 'Inner')] == ['x', 'y']
+
+    def test_an_open_chain_raises(self):
+        roads = self.ring(['a', 'b', 'c'], 'Outer')
+        roads[1].successor = RoadLink('junction', 'j1')
+        with pytest.raises(ValueError, match='road b'):
+            loop_chain(Map(roads={r.id: r for r in roads}), 'Outer')
+
+    def test_a_cycle_missing_the_first_raises(self):
+        roads = self.ring(['a', 'b', 'c'], 'Outer')
+        roads[2].successor = RoadLink('road', 'b', 'start')
+        with pytest.raises(ValueError, match='lead back'):
+            loop_chain(Map(roads={r.id: r for r in roads}), 'Outer')
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:

@@ -47,6 +47,16 @@ def loads(text: Union[str, bytes]) -> Map:
     return from_element(ET.fromstring(text))
 
 
+def user_data(text: Optional[str]) -> list[tuple[str, str]]:
+    """Return the ``(code, value)`` pairs of the ``<userData>`` records an
+    ``attrs['userData']`` keeps, in file order; a code may repeat."""
+    if not text:
+        return []
+    return [(c.get('code', ''), c.get('value', ''))
+            for c in children(_xml.from_string(f'<_>{text}</_>'))
+            if c.tag == 'userData']
+
+
 def from_element(root: Element) -> Map:
     if root.tag != 'OpenDRIVE':
         raise ParseError(f'root element is <{root.tag}>, not <OpenDRIVE>')

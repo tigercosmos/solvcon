@@ -98,11 +98,13 @@ from odrcore.model import (Boundary, Connection, End, Frame, Header,
                            Junction, Lane, LaneSection, Map, MarkSegment,
                            Road, RoadLink, Signal, SpeedLimit, boundary_id)
 from odrcore.osm import LocalTangentPlane, origin_of
+from odrcore.parse import user_data as read_user_data
+from odrcore.topology import loop_chain
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from _gsi import ATTRIBUTION as GSI_ATTRIBUTION  # noqa: E402
 from _gsi import Tiles, height_segment, structure_offset  # noqa: E402
-from _osmroad import (MIN_SPACING, fetch, hermite, loop_chain,  # noqa: E402
+from _osmroad import (MIN_SPACING, fetch, hermite,  # noqa: E402
                       open_tangents, structure, tangents, thin)
 
 BASE_MAP = pathlib.Path(__file__).resolve().parent / 'yamanote.xodr'
@@ -147,8 +149,6 @@ SERVER_TIMEOUT = 180.0
 CLIENT_TIMEOUT = 300.0
 ATTRIBUTION = ('(c) OpenStreetMap contributors, ODbL 1.0, highway ways '
                f'within {RADIUS:g} m of the Yamanote Line')
-STOP_RE = re.compile(r'osm:stop" value="(\w+) .*? s=([-0-9.e+]+)')
-HIGHWAY_RE = re.compile(r'osm:highway" value="(\w+)"')
 
 
 def query(boxes: list[tuple[float, float, float, float]]) -> str:
@@ -175,8 +175,12 @@ class Loop:
                                dtype='float64'):
                 xy.append(road.refline.point(float(s), 0.0)[:2])
                 s_all.append(offset + s)
-            for code, s in STOP_RE.findall(road.attrs.get('userData', '')):
-                stops.append((offset + float(s), code))
+            for code, value in read_user_data(road.attrs.get('userData')):
+                if code == 'osm:stop':
+                    # "<ref> <name:en> <name> s=<s> node=<id>"
+                    head, s, _ = value.rsplit(' ', 2)
+                    stops.append((offset + float(s.removeprefix('s=')),
+                                  head.split(' ', 1)[0]))
             offset += road.length
         self.length = offset
         self.xy = np.array(xy, dtype='float64')
@@ -868,7 +872,8 @@ def main(argv: list[str]) -> int:
 
     lengths: dict[str, list[float]] = {h: [] for h in HIGHWAYS}
     for road in m.roads.values():
-        highway = HIGHWAY_RE.search(road.attrs['userData']).group(1)
+        highway = dict(read_user_data(road.attrs['userData']))[
+            'osm:highway']
         lengths[highway].append(road.length)
     for highway, of_class in lengths.items():
         if of_class:

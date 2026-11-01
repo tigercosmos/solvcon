@@ -38,11 +38,13 @@ import odrcore
 from odrcore.geom import PiecewisePoly3
 from odrcore.model import Road
 from odrcore.osm import LocalTangentPlane, origin_of
+from odrcore.parse import user_data
+from odrcore.topology import loop_chain
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from _gsi import (ATTRIBUTION, Tiles, height_segment,  # noqa: E402
                   structure_offset)
-from _osmroad import fetch, loop_chain  # noqa: E402
+from _osmroad import fetch  # noqa: E402
 from yamanote import QUERY, TRACKS  # noqa: E402
 
 SAMPLE = 5.0
@@ -115,9 +117,10 @@ def profile_loop(chain: list[Road], tags: dict[str, dict],
 
 def annotate(road: Road, tags: dict) -> None:
     present = road.attrs.get('userData', '')
+    codes = {code for code, _ in user_data(present)}
     extra = ''.join(f'<userData code="osm:{key}" value="{tags[key]}"/>'
                     for key in ('layer', 'embankment', 'cutting')
-                    if key in tags and f'code="osm:{key}"' not in present)
+                    if key in tags and f'osm:{key}' not in codes)
     road.attrs['userData'] = present + extra
 
 
@@ -142,7 +145,8 @@ def main(argv: list[str]) -> int:
              for s in np.linspace(0.0, road.length, 8)]
         print(f'{label}: {len(chain)} roads, elevation {min(z):.1f} to '
               f'{max(z):.1f} m, samples by source {used}')
-    if 'source:elevation' not in m.header.attrs['userData']:
+    if 'source:elevation' not in dict(user_data(
+            m.header.attrs.get('userData'))):
         m.header.attrs['userData'] += (
             f'<userData code="source:elevation" value="{ATTRIBUTION}"/>')
     odrcore.dump(m, out)
