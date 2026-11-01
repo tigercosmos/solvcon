@@ -41,7 +41,10 @@ station number order, e.g. ``JY05-JY06``.
 A traffic signal node becomes a dynamic ``<signal>`` for each direction
 whose lanes arrive at it, ``sig<node id>`` on the left edge for the lanes
 along the road and ``sig<node id>r`` on the right edge for those against
-it, with ``-<road id>`` appended when the node is on several roads. A
+it, with ``-<road id>`` appended when the node is on several roads. The
+signal is the three-light traffic light ``1000001`` of the German
+catalogue with ``country="DEU"``, as there is no Japanese one, so that a
+tool that looks the type up in the catalogue of the country finds it. A
 crossing node becomes a ``crosswalk`` ``<object>`` ``cw<node id>`` across
 the carriageway of the first road through it.
 
@@ -114,9 +117,8 @@ MAJOR = ('motorway', 'trunk', 'primary', 'secondary', 'tertiary')
 MINOR = ('unclassified', 'residential', 'living_street')
 HIGHWAYS = MAJOR + MINOR + tuple(f'{c}_link' for c in MAJOR)
 NODE_TAGS = {'traffic_signals': 'signal', 'crossing': 'crossing'}
-# The three-light traffic light of the German sign catalog, which OpenDRIVE
-# tools read whatever the country.
 TRAFFIC_LIGHT = '1000001'
+TRAFFIC_LIGHT_COUNTRY = 'DEU'
 CROSSWALK_LENGTH = 4.0
 MARK_WIDTH = 0.15
 # Lanes in each direction when the way has no lane tags.
@@ -613,13 +615,15 @@ def traffic_lights(road: Road, s: float, nid: int,
     out = []
     if sec.left and s > 0.0:
         out.append(Signal(f'sig{nid}{suffix}', road, s, left.t(s),
-                          type=TRAFFIC_LIGHT, country='JPN', dynamic=True,
-                          orientation='+', validity=[(1, len(sec.left))]))
+                          type=TRAFFIC_LIGHT, country=TRAFFIC_LIGHT_COUNTRY,
+                          dynamic=True, orientation='+',
+                          validity=[(1, len(sec.left))]))
     if (sec.right or both) and s < road.length:
         valid = (-1, -len(sec.right)) if sec.right else (1, 1)
         out.append(Signal(f'sig{nid}r{suffix}', road, s, right.t(s),
-                          type=TRAFFIC_LIGHT, country='JPN', dynamic=True,
-                          orientation='-', validity=[valid]))
+                          type=TRAFFIC_LIGHT, country=TRAFFIC_LIGHT_COUNTRY,
+                          dynamic=True, orientation='-',
+                          validity=[valid]))
     return out
 
 

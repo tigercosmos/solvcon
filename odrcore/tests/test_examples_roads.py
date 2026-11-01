@@ -451,7 +451,7 @@ def test_signal_one_way(built):
     road = m.roads['12']
     (sig,) = road.signals
     assert (sig.type, sig.subtype, sig.country, sig.dynamic) == \
-        ('1000001', '-1', 'JPN', True)
+        ('1000001', '-1', 'DEU', True)
     # One light for the three lanes, on their outer edge to the left.
     assert signals(road) == {'sig4': ('+', 4.5, [(1, 3)])}
     assert math.dist(road.refline.point(sig.s, 0.0)[:2], local[4]) < 1e-6
