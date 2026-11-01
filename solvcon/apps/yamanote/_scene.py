@@ -10,10 +10,12 @@ builds headlessly.
 """
 
 import pathlib
-import re
 import time
 
 import odrcore
+from odrcore.parse import user_data
+from odrcore.topology import loop_chain
+
 from ... import odrmesh
 
 __all__ = [
@@ -30,9 +32,6 @@ MAP_PATH = pathlib.Path(odrcore.__file__).parent / 'examples' / 'yamanote.xodr'
 #: checked in, so a scene without it draws the line alone.
 ROADS_PATH = MAP_PATH.with_name('yamanote_roads.xodr')
 LOOPS = ('Outer', 'Inner')
-STOP_RE = re.compile(r'osm:stop" value="(\w+) (.+) (\S+) s=([-0-9.e+]+)')
-HIGHWAY_RE = re.compile(r'osm:highway" value="([^"]+)"')
-SEGMENT_RE = re.compile(r'"segment" value="([^"]+)"')
 #: The OSM highway classes drawn as major roads, with their ``_link`` ramps;
 #: every other class is minor.
 MAJOR_HIGHWAYS = frozenset(['motorway', 'trunk', 'primary', 'secondary'])
@@ -83,7 +82,7 @@ class Scene(object):
 
     def __init__(self, path=MAP_PATH, roads_path=None):
         self.map = odrcore.load(path)
-        self.chains = {loop: self._chain(loop) for loop in LOOPS}
+        self.chains = {loop: loop_chain(self.map, loop) for loop in LOOPS}
         self.stations = [st for loop in LOOPS for st in self._stops(loop)]
         if roads_path is None:
             roads_path = ROADS_PATH
@@ -99,12 +98,10 @@ class Scene(object):
     def _group(roads):
         groups = {}
         for road in roads:
-            data = road.attrs.get('userData', '')
-            segment = SEGMENT_RE.search(data)
-            segment = segment.group(1) if segment else 'other'
-            highway = HIGHWAY_RE.search(data)
-            major = (highway is not None and highway.group(1).removesuffix(
-                '_link') in MAJOR_HIGHWAYS)
+            data = dict(user_data(road.attrs.get('userData')))
+            segment = data.get('segment', 'other')
+            major = (data.get('osm:highway', '').removesuffix('_link')
+                     in MAJOR_HIGHWAYS)
             name = f'roads.{segment}.{"major" if major else "minor"}'
             groups.setdefault(name, []).append(road)
         return dict(sorted(groups.items()))
@@ -117,22 +114,17 @@ class Scene(object):
     def is_minor(group):
         return group.endswith('.minor')
 
-    def _chain(self, loop):
-        first = next(r for r in self.map.roads.values()
-                     if r.name.startswith(loop))
-        chain, road = [], first
-        while True:
-            chain.append(road)
-            road = self.map.roads[road.successor.element_id]
-            if road is first:
-                return chain
-
     def _stops(self, loop):
         offset = 0.0
         for road in self.chains[loop]:
-            for code, en, ja, s in STOP_RE.findall(
-                    road.attrs.get('userData', '')):
-                s = float(s)
+            for kind, value in user_data(road.attrs.get('userData')):
+                if kind != 'osm:stop':
+                    continue
+                # "<code> <name:en> <name> s=<s> node=<id>"
+                head, s, _ = value.rsplit(' ', 2)
+                code, names = head.split(' ', 1)
+                en, ja = names.rsplit(' ', 1)
+                s = float(s.removeprefix('s='))
                 yield Station(code, en, ja, loop,
                               road.refline.point(s, 0.0), offset + s)
             offset += road.length

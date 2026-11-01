@@ -40,6 +40,7 @@ from odrcore.model import (Boundary, Frame, Header, Lane, LaneLink,
                            LaneSection, Map, Road, RoadLink, SpeedLimit,
                            boundary_id)
 from odrcore.osm import LocalTangentPlane
+from odrcore.parse import user_data as read_user_data
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from _osmroad import (fetch, hermite, structure, tangents,  # noqa: E402
@@ -205,7 +206,8 @@ def main(argv: list[str]) -> int:
     for rel_id, label in TRACKS:
         roads = [r for r in m.roads.values() if r.name.startswith(label)]
         total = sum(r.length for r in roads)
-        stops = sum(r.attrs['userData'].count('osm:stop') for r in roads)
+        stops = sum(code == 'osm:stop' for r in roads
+                    for code, _ in read_user_data(r.attrs['userData']))
         print(f'{label}: {len(roads)} roads, {total / 1000.0:.3f} km, '
               f'{stops} stops')
     print(f'wrote {out}')

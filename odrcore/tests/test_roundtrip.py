@@ -214,4 +214,25 @@ class TestJunction:
         assert refers == {('1', 0, -1), ('3', 0, -1)}
         assert m.roads['3'].signal_refs[0].signal_id == 'tl1'
 
+
+class TestUserData:
+
+    def test_pairs_in_order_with_repeated_codes(self):
+        text = ('<userData code="osm:way" value="7"/>\n'
+                '<userData code="osm:stop" value="JY01 A &amp; B s=1.5"/>'
+                '<userData code="osm:stop" value="JY02 &quot;C&quot; s=9"/>'
+                '<userData code="note">free text</userData>')
+        assert parse.user_data(text) == [
+            ('osm:way', '7'), ('osm:stop', 'JY01 A & B s=1.5'),
+            ('osm:stop', 'JY02 "C" s=9'), ('note', '')]
+
+    def test_nothing_kept_gives_no_pairs(self):
+        assert parse.user_data('') == []
+        assert parse.user_data(None) == []
+
+    def test_reads_what_a_load_keeps(self):
+        m = parse.load(fixture('straight_three_sections'))
+        pairs = parse.user_data(m.header.attrs['userData'])
+        assert pairs and all(code for code, _ in pairs)
+
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:

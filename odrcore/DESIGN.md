@@ -18,9 +18,9 @@ the lossless round trip.
 | --- | --- |
 | `geom.py` | `PiecewisePoly3`, plan-view primitives, `RefLine`. Analytic only. |
 | `model.py` | Entities and the `Map` container. |
-| `parse.py` | `load(path)`, `loads(text)`: `.xodr` to `Map`, with the reshaping. |
+| `parse.py` | `load(path)`, `loads(text)`: `.xodr` to `Map`, with the reshaping. `user_data(text)`: the `(code, value)` pairs of the kept `<userData>`. |
 | `serialize.py` | `dump(map, path, lane_geometry="width"|"border")`, `dumps`. |
-| `topology.py` | Derived `Link` index, travel-direction accessors, `validate`. |
+| `topology.py` | Derived `Link` index, travel-direction accessors, `validate`, `loop_chain` of road successors. |
 | `compare.py` | Canonical form and `equivalent(a, b)` for round-trip checks. |
 | `view.py` | Disposable Lanelet2 view: sampled linestrings, lanelets, routing. |
 | `osm.py` | `dump(map, path)`, `dumps`: the Lanelet2 view as a Lanelet2 OSM file. |

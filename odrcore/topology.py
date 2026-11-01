@@ -185,6 +185,23 @@ def _find(sec: LaneSection, odr_id: int) -> Optional[Lane]:
     return None
 
 
+def loop_chain(m: Map, label: str) -> list[Road]:
+    """Return the roads of the closed chain of road successors through the
+    first road whose name starts with ``label``, in successor order."""
+    first = next(r for r in m.roads.values() if r.name.startswith(label))
+    chain, road = [], first
+    while True:
+        chain.append(road)
+        link = road.successor
+        if (link is None or link.element_type != 'road'
+                or len(chain) > len(m.roads)):
+            raise ValueError(f'road {road.id} does not lead back to road '
+                             f'{first.id}')
+        road = m.roads[link.element_id]
+        if road is first:
+            return chain
+
+
 def validate(m: Map, tol: float = 1e-3) -> list[str]:
     """Consistency of the links the file declares. Returns messages; an
     empty list means no problem was found."""
