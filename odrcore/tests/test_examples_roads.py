@@ -366,6 +366,38 @@ def test_bridge_ramps(elevated):
             pytest.approx(elev.derivative(s0), abs=1e-6)
 
 
+def test_bridge_meets_tunnel(base, loop):
+    """Bridge way 71 ends where tunnel way 72 starts; neither touches the
+    ground, so only the ramp grade brings them to one height."""
+    p, nrm, tan = loop_frame(loop, 0.5 * (loop.stop_s[4] + loop.stop_s[5]))
+    o = p + 100.0 * nrm
+    geo, _ = on_ellipsoid(loop, {k: o + 40.0 * k * tan for k in range(5)})
+    data = {'elements': [
+        osm_way(geo, 71, [0, 1, 2], highway='primary', bridge='yes'),
+        osm_way(geo, 72, [2, 3, 4], highway='primary', tunnel='yes')]}
+    tiles = SlopedTiles(loop)
+    m, _, _ = yamanote_roads.build(data, base, tiles)
+    grade = yamanote_roads.RAMP_GRADE
+    offsets = {}
+    for rid, road in m.roads.items():
+        elev = road.refline.elevation
+        s = np.array([seg[0] for seg in elev.segs] + [road.length],
+                     dtype='float64')
+        xy = [road.refline.point(float(v), 0.0)[:2] for v in s]
+        off = np.array([elev(v) - tiles.height(*loop.plane.to_geodetic(
+            x, y, 0.0)[:2])[0] for v, (x, y) in zip(s, xy)],
+            dtype='float64')
+        assert np.abs(np.diff(off) / np.diff(s)).max() <= grade + 1e-9
+        offsets[rid] = off
+    # The joint comes down from the 7 m deck toward the 10 m deep tube.
+    assert offsets['71'][-1] == pytest.approx(offsets['72'][0], abs=1e-9)
+    assert -10.0 < offsets['72'][0] < 7.0
+    assert offsets['71'].max() > 0.0 > offsets['72'].min()
+    ranked = yamanote_roads.steepest(m)
+    assert [road.id for _, road in ranked] in (['71', '72'], ['72', '71'])
+    assert ranked[0][0] >= ranked[1][0]
+
+
 def test_tile_cache(tmp_path):
     x, y = 29102, 12903
     path = tmp_path / 'dem5a' / str(_gsi.ZOOM) / str(x) / f'{y}.txt'
