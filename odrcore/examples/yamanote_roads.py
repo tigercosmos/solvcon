@@ -290,15 +290,17 @@ def speed(tags: dict) -> float:
 def vertices(way: dict, ltp: LocalTangentPlane,
              pinned: set[int]) -> tuple[np.ndarray, list[int]]:
     """The thinned vertices of a way and their node ids. Consecutive nodes
-    at the same place are merged, and a free vertex closer than
-    ``MIN_SPACING`` to the last node is dropped so that the last segment
-    is not a stub."""
+    at the same place are merged into the first pinned one of them, or
+    into the last node of the way, which the road ends at. A free vertex
+    closer than ``MIN_SPACING`` to the last node is dropped so that the
+    last segment is not a stub."""
     ids, xy = [], []
-    for nid, g in zip(way['nodes'], way['geometry']):
+    last = len(way['nodes']) - 1
+    for k, (nid, g) in enumerate(zip(way['nodes'], way['geometry'])):
         p = np.array(ltp.to_local(g['lat'], g['lon'], 0.0)[:2],
                      dtype='float64')
         if xy and np.hypot(*(p - xy[-1])) < 1e-3:
-            if nid in pinned:
+            if nid in pinned and (k == last or ids[-1] not in pinned):
                 ids[-1] = nid
             continue
         ids.append(nid)
