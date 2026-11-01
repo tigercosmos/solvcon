@@ -19,6 +19,8 @@ import urllib.request
 
 import numpy as np
 
+from _osmroad import tagged
+
 TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/{src}/{z}/{x}/{y}.txt'
 SOURCES = ('dem5a', 'dem5b', 'dem10b')
 ZOOM = 15
@@ -111,13 +113,13 @@ def structure_offset(tags: dict) -> float:
         layer = int(tags.get('layer', '0') or 0)
     except ValueError:
         layer = 0
-    if tags.get('tunnel'):
+    if tagged(tags, 'tunnel'):
         return TUNNEL * max(-layer, 1)
-    if tags.get('bridge'):
+    if tagged(tags, 'bridge'):
         return VIADUCT * max(layer, 1)
-    if tags.get('embankment'):
+    if tagged(tags, 'embankment'):
         return EMBANKMENT
-    if tags.get('cutting'):
+    if tagged(tags, 'cutting'):
         return CUTTING
     return 0.0
 
