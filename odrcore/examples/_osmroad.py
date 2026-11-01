@@ -70,7 +70,8 @@ def hermite(s0: float, p0, p1, t0, t1) -> ParamPoly3:
     chord = float(np.hypot(*(p1 - p0)))
 
     def local(v):
-        return np.array([v[0] * ch + v[1] * sh, -v[0] * sh + v[1] * ch])
+        return np.array([v[0] * ch + v[1] * sh, -v[0] * sh + v[1] * ch],
+                        dtype='float64')
 
     q1, m0, m1 = local(p1 - p0), local(t0) * chord, local(t1) * chord
     b, c, d = m0, 3.0 * q1 - 2.0 * m0 - m1, -2.0 * q1 + m0 + m1
