@@ -168,6 +168,7 @@ class Loop:
 
     def __init__(self, m: Map) -> None:
         self.plane = LocalTangentPlane(*origin_of(m))
+        self.geo_reference = m.frame.geo_reference
         xy, s_all, stops, offset = [], [], [], 0.0
         for road in loop_chain(m, LOOP):
             for s in np.arange(0.0, road.length, PROJECT_STEP,
@@ -700,12 +701,12 @@ def add_elevation(m: Map, ways,
                 road_offset(way['tags']), ground)
 
 
-def build(data: dict, base: Map, tiles: Tiles | None = None
+def build(data: dict, loop: Loop, tiles: Tiles | None = None
           ) -> tuple[Map, list[str], int]:
-    """The road map, the ids of the roads of one distinct node and the
-    number of ways farther than ``RADIUS`` from the loop. Without the
-    elevation ``tiles`` the roads are flat."""
-    loop = Loop(base)
+    """The road map about the ``loop`` of the track map, the ids of the
+    roads of one distinct node and the number of ways farther than
+    ``RADIUS`` from the loop. Without the elevation ``tiles`` the roads are
+    flat."""
     ltp = loop.plane
     ways = {}
     for e in data['elements']:
@@ -783,7 +784,7 @@ def build(data: dict, base: Map, tiles: Tiles | None = None
     if tiles is not None:
         m.header.attrs['userData'] += (
             f'<userData code="source:elevation" value="{GSI_ATTRIBUTION}"/>')
-    m.frame = Frame(geo_reference=base.frame.geo_reference)
+    m.frame = Frame(geo_reference=loop.geo_reference)
     m.reindex()
     return m, skipped, outside
 
@@ -853,16 +854,16 @@ def main(argv: list[str]) -> int:
     parser.add_argument('overpass', type=pathlib.Path, nargs='?')
     args = parser.parse_args(argv[1:])
 
-    base = odrcore.load(args.base)
+    loop = Loop(odrcore.load(args.base))
     if args.overpass:
         data = json.loads(args.overpass.read_text('utf-8'))
     else:
-        data = fetch_all(Loop(base).boxes())
+        data = fetch_all(loop.boxes())
         cache = args.out.with_suffix('.json')
         cache.write_text(json.dumps(data), 'utf-8')
         print(f'saved the Overpass response to {cache}')
     tiles = None if args.flat else Tiles()
-    m, skipped, outside = build(data, base, tiles)
+    m, skipped, outside = build(data, loop, tiles)
     odrcore.dump(m, args.out)
 
     lengths: dict[str, list[float]] = {h: [] for h in HIGHWAYS}

@@ -103,10 +103,10 @@ def overpass(loop, s_mid, s_wrap):
 
 
 @pytest.fixture(scope='module')
-def built(base, loop):
+def built(loop):
     s_mid = 0.5 * (loop.stop_s[0] + loop.stop_s[1])
     data, local = overpass(loop, s_mid, loop.length - 50.0)
-    m, skipped, outside = yamanote_roads.build(data, base)
+    m, skipped, outside = yamanote_roads.build(data, loop)
     assert outside == 1
     return m, skipped, local
 
@@ -206,7 +206,7 @@ def test_user_data(built):
 
 
 @pytest.fixture(scope='module')
-def crossing(base, loop):
+def crossing(loop):
     """Way 31 bends through node 42, where one-way way 32 leaves it. Way 33
     runs into the end of way 32 head to head, and starts where way 35, a
     single lane for both directions, starts too. Way 34 is a roundabout.
@@ -237,7 +237,7 @@ def crossing(base, loop):
                       (45, 'crossing')):
         elements.append({'type': 'node', 'id': nid, **geo[nid],
                          'tags': {'highway': kind}})
-    m, skipped, _ = yamanote_roads.build({'elements': elements}, base)
+    m, skipped, _ = yamanote_roads.build({'elements': elements}, loop)
     assert skipped == []
     return m
 
@@ -334,11 +334,11 @@ class SlopedTiles:
 
 
 @pytest.fixture(scope='module')
-def elevated(base, loop):
+def elevated(loop):
     s_mid = 0.5 * (loop.stop_s[0] + loop.stop_s[1])
     data, _ = overpass(loop, s_mid, loop.length - 50.0)
     tiles = SlopedTiles(loop)
-    m, _, _ = yamanote_roads.build(data, base, tiles)
+    m, _, _ = yamanote_roads.build(data, loop, tiles)
 
     def ground(road, s):
         x, y, _ = road.refline.point(s, 0.0)
@@ -384,7 +384,7 @@ def test_bridge_ramps(elevated):
             pytest.approx(elev.derivative(s0), abs=1e-6)
 
 
-def test_bridge_meets_tunnel(base, loop):
+def test_bridge_meets_tunnel(loop):
     """Bridge way 71 ends where tunnel way 72 starts; neither touches the
     ground, so only the ramp grade brings them to one height."""
     p, nrm, tan = loop_frame(loop, 0.5 * (loop.stop_s[4] + loop.stop_s[5]))
@@ -394,7 +394,7 @@ def test_bridge_meets_tunnel(base, loop):
         osm_way(geo, 71, [0, 1, 2], highway='primary', bridge='yes'),
         osm_way(geo, 72, [2, 3, 4], highway='primary', tunnel='yes')]}
     tiles = SlopedTiles(loop)
-    m, _, _ = yamanote_roads.build(data, base, tiles)
+    m, _, _ = yamanote_roads.build(data, loop, tiles)
     grade = yamanote_roads.RAMP_GRADE
     offsets = {}
     for rid, road in m.roads.items():
