@@ -50,17 +50,18 @@ map, so the two maps overlay, and the same ``paramPoly3`` fit.
 
 The height of a node is the ground height from the GSI elevation tiles plus
 the structure offset of the way through it with the smallest magnitude, so
-that a bridge comes down to the ground road it meets, and no more than
-``RAMP_GRADE`` times the distance along the roads from a node of a smaller
-offset. Along a bridge, tunnel, embankment or cutting the offset ramps
-linearly at that grade from those of its end nodes to its own, and a
-passage through a building stays on the ground. A bridge or an
-embankment does not dip below the straight line between its ends, nor
-does a tunnel or a cutting rise above it. The elevation profile is a cubic
-Hermite spline through the vertices and knots at most ``KNOT`` apart;
-``--flat`` skips the tiles and leaves the roads at z = 0. The tiles are
-kept in the directory the environment variable ``GSI_TILE_CACHE`` names,
-``~/.cache/solvcon-gsi`` by default.
+that a bridge comes down to the ground road it meets, moved toward zero
+until it differs from the offset of no other node by more than
+``RAMP_GRADE`` times the distance along the roads between them, so that a
+bridge ending at a tunnel comes down too. Along a bridge, tunnel,
+embankment or cutting the offset ramps linearly at that grade from those
+of its end nodes to its own, and a passage through a building stays on
+the ground. A bridge or an embankment does not dip below the straight
+line between its ends, nor does a tunnel or a cutting rise above it. The
+elevation profile is a cubic Hermite spline through the vertices and
+knots at most ``KNOT`` apart; ``--flat`` skips the tiles and leaves the
+roads at z = 0. The tiles are kept in the directory the environment
+variable ``GSI_TILE_CACHE`` names, ``~/.cache/solvcon-gsi`` by default.
 
 Map data (c) OpenStreetMap contributors, ODbL 1.0. The output is a derived
 database under the same license. Elevation tiles (c) Geospatial
@@ -515,8 +516,9 @@ def node_offsets(m: Map, ways, geo: dict[str, tuple[dict, np.ndarray,
                                                     list[int]]]
                  ) -> dict[int, float]:
     """The structure offset of each road end node: that of the way through
-    it with the smallest magnitude, reduced where a road would have to
-    climb to it from a lower node steeper than ``RAMP_GRADE``."""
+    it with the smallest magnitude, moved toward zero where a road would
+    have to climb or drop to it from a neighbor steeper than
+    ``RAMP_GRADE``."""
     own: dict[int, float] = {}
     for way in ways:
         off = road_offset(way['tags'])
@@ -528,18 +530,28 @@ def node_offsets(m: Map, ways, geo: dict[str, tuple[dict, np.ndarray,
         climb = RAMP_GRADE * m.roads[rid].length
         graph.setdefault(ids[0], []).append((ids[-1], climb))
         graph.setdefault(ids[-1], []).append((ids[0], climb))
-    size = {nid: abs(own[nid]) for nid in graph}
-    heap = [(v, nid) for nid, v in size.items()]
-    heapq.heapify(heap)
-    while heap:
-        v, nid = heapq.heappop(heap)
-        if v > size[nid]:
-            continue
-        for other, climb in graph[nid]:
-            if v + climb < size[other]:
-                size[other] = v + climb
-                heapq.heappush(heap, (v + climb, other))
-    return {nid: math.copysign(v, own[nid]) for nid, v in size.items()}
+
+    def envelope(sign: float) -> dict[int, float]:
+        """The largest offset at most ``own`` that changes by no more than
+        the climb along a road, or with ``sign`` -1 the smallest at least
+        ``own``."""
+        bound = {nid: sign * own[nid] for nid in graph}
+        heap = [(v, nid) for nid, v in bound.items()]
+        heapq.heapify(heap)
+        while heap:
+            v, nid = heapq.heappop(heap)
+            if v > bound[nid]:
+                continue
+            for other, climb in graph[nid]:
+                if v + climb < bound[other]:
+                    bound[other] = v + climb
+                    heapq.heappush(heap, (v + climb, other))
+        return {nid: sign * v for nid, v in bound.items()}
+
+    under, over = envelope(1.0), envelope(-1.0)
+    # under <= own <= over, and both keep to the grade, so does the value
+    # between them closest to the ground.
+    return {nid: min(max(0.0, under[nid]), over[nid]) for nid in graph}
 
 
 def elevate(road: Road, ids: list[int], z_node: dict[int, float],
@@ -547,12 +559,13 @@ def elevate(road: Road, ids: list[int], z_node: dict[int, float],
     """Fit the elevation profile through the heights of the end nodes and
     of the ground plus the structure offset in between, which ramps from
     those of the end nodes at ``RAMP_GRADE``."""
-    length, full = road.length, abs(offset)
-    a0, a1 = abs(off_node[ids[0]]), abs(off_node[ids[-1]])
+    length, grade = road.length, RAMP_GRADE
+    a0, a1 = off_node[ids[0]], off_node[ids[-1]]
     knots = [g.s0 for g in road.refline.plan] + [length]
-    knots += [v for v in ((full - a0) / RAMP_GRADE,
-                          length - (full - a1) / RAMP_GRADE,
-                          0.5 * (length + (a1 - a0) / RAMP_GRADE))
+    knots += [v for v in (abs(offset - a0) / grade,
+                          length - abs(offset - a1) / grade,
+                          0.5 * (length + (a1 - a0) / grade),
+                          0.5 * (length - (a1 - a0) / grade))
               if 0.0 < v < length]
     knots = sorted(knots)
     s = [knots[0]]
@@ -562,8 +575,9 @@ def elevate(road: Road, ids: list[int], z_node: dict[int, float],
         n = math.ceil((b - a) / KNOT)
         s += [a + (b - a) * k / n for k in range(1, n + 1)]
     s = np.array(s, dtype='float64')
-    off = math.copysign(1.0, offset) * np.minimum(
-        full, np.minimum(a0 + RAMP_GRADE * s, a1 + RAMP_GRADE * (length - s)))
+    upper = np.minimum(a0 + grade * s, a1 + grade * (length - s))
+    lower = np.maximum(a0 - grade * s, a1 - grade * (length - s))
+    off = np.clip(offset, lower, upper)
     z = np.array([ground(*road.refline.point(float(v), 0.0)[:2])
                   for v in s[1:-1]], dtype='float64') + off[1:-1]
     z = np.concatenate([[z_node[ids[0]]], z, [z_node[ids[-1]]]])
@@ -768,6 +782,22 @@ def build(data: dict, base: Map, tiles: Tiles | None = None
     return m, skipped, outside
 
 
+def steepest(m: Map, count: int = 5) -> list[tuple[float, Road]]:
+    """The ``count`` roads of the steepest grade between two knots of
+    their elevation profile, steepest first."""
+    out = []
+    for road in m.roads.values():
+        elev = road.refline.elevation
+        if not elev.segs:
+            continue
+        s = np.array([seg[0] for seg in elev.segs] + [road.length],
+                     dtype='float64')
+        z = np.array([elev(v) for v in s], dtype='float64')
+        out.append((float(np.abs(np.diff(z) / np.diff(s)).max()), road))
+    out.sort(key=lambda item: -item[0])
+    return out[:count]
+
+
 def fetch_politely(text: str) -> dict:
     """Fetch, and once more after a pause when Overpass is busy."""
     try:
@@ -841,6 +871,11 @@ def main(argv: list[str]) -> int:
              for s in np.linspace(0.0, road.length, 5, dtype='float64')]
         print(f'elevation {min(z):.1f} to {max(z):.1f} m, '
               f'{tiles.fetched} tiles fetched')
+        for grade, road in steepest(m):
+            elev = road.refline.elevation
+            print(f'steepest: road {road.id}, {100.0 * grade:.0f}% over '
+                  f'{road.length:.1f} m, z {elev(0.0):.2f} to '
+                  f'{elev(road.length):.2f} m')
     crosswalks = sum(r.attrs.get('_unknown', '').count('"crosswalk"')
                      for r in m.roads.values())
     print(f'{len(m.signals)} traffic lights, {crosswalks} crosswalks')
