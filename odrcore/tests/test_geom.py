@@ -7,7 +7,8 @@ import numpy as np
 import pytest
 
 from odrcore.geom import (Arc, Line, ParamPoly3, PiecewisePoly3, Poly3,
-                          RefLine, Spiral, fresnel)
+                          RefLine, Spiral, fresnel, poly3_values,
+                          refline_points)
 
 
 def simpson(f, a, b, n=200001):
@@ -195,5 +196,69 @@ class TestRefLine:
         assert z == pytest.approx(1.0 + 0.1 * s + t * math.sin(0.2))
         x2, y2, z2 = rl.point(s, -t)
         assert z2 == pytest.approx(1.0 + 0.1 * s - t * math.sin(0.2))
+
+
+class TestBatched:
+    """The batched evaluation agrees with the scalar one station by
+    station, across owners and across every kind of plan geometry."""
+
+    def lines(self):
+        elev = PiecewisePoly3([(0.0, 1.0, 0.1, 0.0, 0.0),
+                               (7.0, 1.7, -0.05, 0.001, 0.0)])
+        sup = PiecewisePoly3([(4.0, 0.0, 0.01, 0.0, 0.0)])
+        mixed = RefLine([Line(0.0, 5.0, 0.0, 0.0, 0.3),
+                         Arc(5.0, 4.0, 1.0, 2.0, 0.5, curvature=0.1),
+                         Arc(9.0, 3.0, 2.0, 3.0, 0.7, curvature=0.0),
+                         Spiral(12.0, 6.0, 3.0, 4.0, 0.9, 0.01, -0.03)],
+                        elev, sup)
+        poly = RefLine([Poly3(0.0, 8.0, -3.0, 1.0, 0.2, a=0.1, b=0.05,
+                              c=0.01, d=-0.001),
+                        ParamPoly3(8.0, 6.0, 5.0, 5.0, 1.0, b_u=1.0,
+                                   c_v=0.02),
+                        ParamPoly3(14.0, 9.0, 9.0, 6.0, 1.2, b_u=8.0,
+                                   c_u=0.5, b_v=0.5, c_v=1.5, d_v=-0.4,
+                                   p_range='normalized')])
+        return [mixed, poly]
+
+    def stations(self, lines):
+        owner, s = [], []
+        for k, line in enumerate(lines):
+            for v in np.linspace(0.0, line.length, 23):
+                owner.append(k)
+                s.append(v)
+        return (np.array(owner, dtype='int64'),
+                np.array(s, dtype='float64'))
+
+    def test_poly3_values_match_the_scalar_calls(self):
+        polys = [PiecewisePoly3([(2.0, 1.0, 0.5, 0.0, 0.0),
+                                 (5.0, 2.0, 0.0, 0.1, 0.01)]),
+                 PiecewisePoly3(),
+                 PiecewisePoly3.constant(3.0, 1.0)]
+        owner = np.array([0, 0, 0, 0, 1, 2, 2, 0], dtype='int64')
+        s = np.array([0.0, 2.0, 5.0, 9.0, 4.0, 0.0, 6.0, 4.999],
+                     dtype='float64')
+        got = poly3_values(polys, owner, s)
+        want = [polys[k](v) for k, v in zip(owner, s)]
+        np.testing.assert_array_equal(got, want)
+
+    def test_refline_points_match_point(self):
+        lines = self.lines()
+        owner, s = self.stations(lines)
+        t = np.linspace(-4.0, 4.0, len(s))
+        got = refline_points(lines, owner, s, t)
+        want = [lines[k].point(v, w) for k, v, w in zip(owner, s, t)]
+        np.testing.assert_allclose(got, want, rtol=0.0, atol=1e-10)
+
+    def test_trailing_offsets_share_a_pose(self):
+        lines = self.lines()
+        owner, s = self.stations(lines)
+        t = np.stack([np.full(len(s), 2.0, dtype='float64'),
+                      np.full(len(s), -1.5, dtype='float64')], axis=1)
+        got = refline_points(lines, owner, s, t)
+        assert got.shape == (len(s), 2, 3)
+        for col in range(2):
+            np.testing.assert_allclose(
+                got[:, col], refline_points(lines, owner, s, t[:, col]),
+                rtol=0.0, atol=1e-12)
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:

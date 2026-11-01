@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Sequence
 
 import numpy as np
 
@@ -386,5 +386,175 @@ class RefLine:
         lateral = t * math.cos(roll)
         return (x - lateral * math.sin(hdg), y + lateral * math.cos(hdg),
                 z + t * math.sin(roll))
+
+
+# Batched evaluation: many functions or lines at many stations in one pass,
+# for meshing a whole map. Each station names its owner by index; the
+# results equal the scalar methods to rounding.
+
+def locate(starts: Sequence[Sequence[float]], owner: np.ndarray,
+           s: np.ndarray) -> np.ndarray:
+    """Return, per station, the flat index into the concatenated ``starts``
+    of the last start of its owner at or before ``s``, or the owner's first
+    start before it, as ``PiecewisePoly3`` and ``RefLine`` pick a piece."""
+    counts = np.array([len(st) for st in starts], dtype='int64')
+    first = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    nflat = int(counts.sum())
+    flat = np.fromiter((v for st in starts for v in st), dtype='float64',
+                       count=nflat)
+    index = np.arange(len(starts), dtype='int64')
+    owners = np.concatenate([np.repeat(index, counts),
+                             owner])
+    keys = np.concatenate([flat, s])
+    # A start ties ahead of a station at the same s, so a station on a
+    # breakpoint takes the piece that begins there.
+    kind = np.concatenate([np.zeros(nflat, dtype='int8'),
+                           np.ones(len(s), dtype='int8')])
+    order = np.lexsort((kind, keys, owners))
+    seen = np.cumsum(order < nflat) - 1
+    found = np.empty(len(s), dtype='int64')
+    at = order >= nflat
+    found[order[at] - nflat] = seen[at]
+    return np.maximum(found, first[owner])
+
+
+def poly3_values(polys: Sequence[PiecewisePoly3], owner: np.ndarray,
+                 s: np.ndarray) -> np.ndarray:
+    """Return ``polys[owner[i]](s[i])`` for every station i."""
+    segs = [p.segs or [(0.0, 0.0, 0.0, 0.0, 0.0)] for p in polys]
+    table = np.array([seg for ps in segs for seg in ps], dtype='float64')
+    s0, a, b, c, d = table[locate([[seg[0] for seg in ps] for ps in segs],
+                                  owner, s)].T
+    x = s - s0
+    return a + x * (b + x * (c + x * d))
+
+
+_PANELS = 4
+
+
+def _cubic_deriv(b: np.ndarray, c: np.ndarray, d: np.ndarray) -> Deriv:
+    """``b + 2 c p + 3 d p^2`` with per-station coefficients, for ``p`` of
+    shape ``(n, ...)``."""
+    def deriv(p: np.ndarray) -> np.ndarray:
+        shape = b.shape + (1,) * (p.ndim - 1)
+        bb, cc, dd = b.reshape(shape), c.reshape(shape), d.reshape(shape)
+        return bb + p * (2.0 * cc + 3.0 * dd * p)
+    return deriv
+
+
+def _arc_lengths_to_params(du: Deriv, dv: Deriv, length: np.ndarray,
+                           s: np.ndarray, p_hi: np.ndarray) -> np.ndarray:
+    """``_arc_length_to_param`` for one station of its own curve per entry.
+    The quadrature runs on :data:`_PANELS` fixed panels over ``[0, p_hi]``
+    and a partial one up to p, so every station shares one Newton loop."""
+    def integral(lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
+        half = 0.5 * (hi - lo)
+        t = (0.5 * (hi + lo))[..., None] + half[..., None] * _GL_NODES
+        return np.sum(_GL_WEIGHTS * np.hypot(du(t), dv(t)), axis=-1) * half
+
+    edges = p_hi[:, None] * np.arange(_PANELS + 1, dtype='float64') / _PANELS
+    cum = np.zeros_like(edges)
+    cum[:, 1:] = np.cumsum(integral(edges[:, :-1], edges[:, 1:]), axis=1)
+    rows = np.arange(len(s), dtype='int64')
+    p = np.where(length > 0.0, s / np.where(length > 0.0, length, 1.0) * p_hi,
+                 0.0)
+    for _ in range(50):
+        k = np.clip(np.floor(p / p_hi * _PANELS), 0, _PANELS - 1)
+        k = k.astype('int64')
+        f = cum[rows, k] + integral(edges[rows, k], p) - s
+        g = np.hypot(du(p), dv(p))
+        step = np.divide(f, g, out=np.zeros_like(f), where=g != 0.0)
+        p = p - step
+        if (np.abs(step) < 1e-14 * np.maximum(1.0, np.abs(p))).all():
+            break
+    return p
+
+
+def _plan_local(geoms: Sequence[PlanGeom],
+                ds: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``(u, v, dhdg)`` in the start frame of ``geoms[i]`` at its
+    local arc length ``ds[i]``; every geometry has one type."""
+    kind = type(geoms[0])
+
+    def attr(name: str) -> np.ndarray:
+        return np.array([getattr(g, name) for g in geoms], dtype='float64')
+
+    zero = np.zeros_like(ds)
+    if kind is Line:
+        return ds, zero, zero
+    if kind is Arc:
+        k = attr('curvature')
+        straight = k == 0.0
+        kk = np.where(straight, 1.0, k)
+        th = k * ds
+        return (np.where(straight, ds, np.sin(th) / kk),
+                np.where(straight, 0.0, (1.0 - np.cos(th)) / kk), th)
+    if kind is Poly3:
+        length = attr('length')
+        b, c, d = attr('b'), attr('c'), attr('d')
+        dv = _cubic_deriv(b, c, d)
+        u = _arc_lengths_to_params(np.ones_like, dv, length, ds, length)
+        v = attr('a') + u * (b + u * (c + u * d))
+        return u, v, np.arctan2(dv(u), 1.0)
+    if kind is ParamPoly3:
+        bu, cu, du_ = attr('b_u'), attr('c_u'), attr('d_u')
+        bv, cv, dv_ = attr('b_v'), attr('c_v'), attr('d_v')
+        du, dv = _cubic_deriv(bu, cu, du_), _cubic_deriv(bv, cv, dv_)
+        p = ds.copy()
+        norm = np.array([g.p_range != 'arcLength' for g in geoms],
+                        dtype='bool')
+        if norm.any():
+            sub = np.flatnonzero(norm)
+            dus = _cubic_deriv(bu[sub], cu[sub], du_[sub])
+            dvs = _cubic_deriv(bv[sub], cv[sub], dv_[sub])
+            p[sub] = _arc_lengths_to_params(dus, dvs, attr('length')[sub],
+                                            ds[sub],
+                                            np.ones(len(sub), dtype='float64'))
+        u = attr('a_u') + p * (bu + p * (cu + p * du_))
+        v = attr('a_v') + p * (bv + p * (cv + p * dv_))
+        return u, v, np.arctan2(dv(p), du(p))
+    out = np.array([g.pose(g.s0 + d) for g, d in zip(geoms, ds)],
+                   dtype='float64').reshape(-1, 3)
+    hdg0 = attr('hdg0')
+    ch, sh = np.cos(hdg0), np.sin(hdg0)
+    dx, dy = out[:, 0] - attr('x0'), out[:, 1] - attr('y0')
+    return dx * ch + dy * sh, dy * ch - dx * sh, out[:, 2] - hdg0
+
+
+def refline_points(lines: Sequence[RefLine], owner: np.ndarray,
+                   s: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """Return ``lines[owner[i]].point(s[i], t[i, ...])`` for every station
+    i as an array of shape ``t.shape + (3,)``. ``t`` may carry trailing
+    axes for several offsets at one station, which share one pose."""
+    owner = np.asarray(owner, dtype='int64')
+    s = np.asarray(s, dtype='float64')
+    flat = [g for line in lines for g in line.plan]
+    gi = locate([[g.s0 for g in line.plan] for line in lines], owner, s)
+    u, v, dh = (np.empty_like(s) for _ in range(3))
+    kinds = np.array([id(type(g)) for g in flat], dtype='int64')[gi]
+    for kind in np.unique(kinds):
+        sub = np.flatnonzero(kinds == kind)
+        geoms = [flat[i] for i in gi[sub]]
+        s0 = np.array([g.s0 for g in geoms], dtype='float64')
+        u[sub], v[sub], dh[sub] = _plan_local(geoms, s[sub] - s0)
+
+    def attr(name: str) -> np.ndarray:
+        return np.array([getattr(g, name) for g in flat],
+                        dtype='float64')[gi]
+
+    hdg0 = attr('hdg0')
+    ch, sh = np.cos(hdg0), np.sin(hdg0)
+    x = attr('x0') + u * ch - v * sh
+    y = attr('y0') + u * sh + v * ch
+    hdg = hdg0 + dh
+    z = poly3_values([line.elevation for line in lines], owner, s)
+    roll = poly3_values([line.superelevation for line in lines], owner, s)
+
+    t = np.asarray(t, dtype='float64')
+    shape = s.shape + (1,) * (t.ndim - 1)
+    x, y, z, hdg, roll = (a.reshape(shape) for a in (x, y, z, hdg, roll))
+    lateral = t * np.cos(roll)
+    return np.stack([x - lateral * np.sin(hdg), y + lateral * np.cos(hdg),
+                     z + t * np.sin(roll)], axis=-1)
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:
