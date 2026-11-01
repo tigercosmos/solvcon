@@ -13,6 +13,7 @@ from ...pilot import base
 from . import _scene
 from ._control import TrainController
 from ._panel import TrainPanel
+from ._roads import RoadLayer
 
 __all__ = [  # noqa: F822
     'YamanoteApp',
@@ -22,8 +23,9 @@ __all__ = [  # noqa: F822
 
 class YamanoteApp(base.PilotFeature):
     """Open the Yamanote Line scene: both loops as slabs at their surveyed
-    height, a marker at every stop and the trains of both loops, in a
-    domain viewer, with the dock panel that runs the trains."""
+    height, a marker at every stop, the streets around the line when their
+    map is there and the trains of both loops, in a domain viewer, with the
+    dock panel that runs the trains."""
 
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
@@ -31,6 +33,7 @@ class YamanoteApp(base.PilotFeature):
         self._viewer = None
         self._dock = None
         self._control = None
+        self._roads = None
         # Held for the viewer's lifetime: a throwaway mdiArea wrapper is
         # garbage-collected right after use, invalidating the sub-window.
         self._mdi = None
@@ -58,6 +61,12 @@ class YamanoteApp(base.PilotFeature):
     def control(self):
         return self._control
 
+    @property
+    def roads(self):
+        """The street layer, or None before a viewer opened or without
+        streets."""
+        return self._roads
+
     def run(self):
         """Show the train panel and open the viewer if it is not open."""
         self._ensure_dock()
@@ -70,6 +79,8 @@ class YamanoteApp(base.PilotFeature):
             return
         panel = TrainPanel()
         self._control = TrainController(panel, self.scene)
+        panel.set_roads_available(bool(self.scene.road_groups))
+        panel.roads_toggled = self._on_roads
         self._dock = QDockWidget("Yamanote Line")
         self._dock.setWidget(panel)
         self._mgr.mainWindow.addDockWidget(Qt.LeftDockWidgetArea, self._dock)
@@ -80,6 +91,12 @@ class YamanoteApp(base.PilotFeature):
         for loop in _scene.LOOPS:
             viewer.addObject(loop, scene.loop_mesh(loop))
             viewer.setObjectColor(loop, *_scene.COLORS[loop])
+        if scene.road_groups:
+            if self._roads is None:
+                self._roads = RoadLayer(scene)
+            self._roads.set_visible(self._dock.widget().roads_shown())
+            self._roads.attach(viewer)
+            self._control.wide_changed = self._roads.set_wide
         marker = scene.marker_mesh()
         for st in scene.stations:
             name = f'{st.code}.{st.loop}'
@@ -100,6 +117,16 @@ class YamanoteApp(base.PilotFeature):
             f"yamanote: {len(scene.stations)} stops and "
             f"{len(self._control.names)} trains on "
             f"{len(_scene.LOOPS)} loops\n")
+        if self._roads is not None:
+            seconds = scene.roads_seconds + self._roads.build_seconds
+            self._pycon.writeToHistory(
+                f"yamanote: {scene.road_count} roads in "
+                f"{len(scene.road_groups)} groups, loaded and meshed in "
+                f"{seconds:.1f} s\n")
+
+    def _on_roads(self, shown):
+        if self._roads is not None:
+            self._roads.set_visible(shown)
 
     def _watch_close(self):
         """Delete the sub-window on close and hear of that close before Qt
@@ -116,6 +143,8 @@ class YamanoteApp(base.PilotFeature):
 
     def _on_closed(self):
         self._control.detach()
+        if self._roads is not None:
+            self._roads.detach()
         self._viewer = None
         self._subwin = None
         self._close_filter = None

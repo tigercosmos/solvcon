@@ -61,6 +61,8 @@ class TrainController(object):
         evaluated at, or None before a viewer is attached.
     :ivar lod_factor: The scale of the markers and the car cross sections.
     :ivar lod_wide: Whether the wide slabs show in place of the true ones.
+    :ivar wide_changed: Owner-supplied callback taking :attr:`lod_wide`
+        each time the detail re-evaluates it, or None.
     """
 
     #: Qt timer interval in milliseconds.
@@ -87,6 +89,7 @@ class TrainController(object):
         self.lod_distance = None
         self.lod_factor = 1.0
         self.lod_wide = False
+        self.wide_changed = None
         self._timer = QTimer()
         self._timer.timeout.connect(self._tick)
         self._lod_timer = QTimer()
@@ -182,6 +185,8 @@ class TrainController(object):
             for loop in _scene.LOOPS:
                 viewer.setObjectVisible(loop, not wide)
                 viewer.setObjectVisible(self._scene.wide_name(loop), wide)
+            if self.wide_changed is not None:
+                self.wide_changed(wide)
         if force or factor != self.lod_factor:
             self.lod_factor = factor
             sx, sy, sz = (factor * v for v in _scene.STATION_SIZE)

@@ -2,7 +2,8 @@
 # BSD 3-Clause License, see COPYING
 
 
-"""Control widget for the trains: play or pause, the speed-up and the clock.
+"""Control widget for the trains: play or pause, the speed-up and the clock,
+and the switch of the streets.
 
 The panel is passive: it reports what its controls hold through callbacks
 and shows what it is told, and the clock belongs to the controller in
@@ -12,7 +13,7 @@ and shows what it is told, and the clock belongs to the controller in
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QWidget, QFormLayout, QLabel, QComboBox,
-                               QPushButton)
+                               QPushButton, QCheckBox)
 
 __all__ = [  # noqa: F822
     'TrainPanel',
@@ -20,12 +21,15 @@ __all__ = [  # noqa: F822
 
 
 class TrainPanel(QWidget):
-    """Play/Pause, the speed factor and the simulated time of day.
+    """Play/Pause, the speed factor, the simulated time of day and whether
+    the streets show.
 
     :ivar play_toggled: Owner-supplied callback taking True to play and
         False to pause, or None.
     :ivar factor_changed: Owner-supplied callback taking the new speed
         factor, or None.
+    :ivar roads_toggled: Owner-supplied callback taking True to show the
+        streets and False to hide them, or None.
     """
 
     FACTORS = (1.0, 10.0, 60.0)
@@ -34,6 +38,7 @@ class TrainPanel(QWidget):
         super().__init__(parent)
         self.play_toggled = None
         self.factor_changed = None
+        self.roads_toggled = None
 
         self._play = QPushButton("Play")
         self._play.setCheckable(True)
@@ -46,17 +51,28 @@ class TrainPanel(QWidget):
         self._clock.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._clock.setFont(
             QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self._roads = QCheckBox("Roads")
+        self._roads.setChecked(True)
+        self._roads.toggled.connect(self._on_roads)
 
         form = QFormLayout(self)
         form.addRow(self._play)
         form.addRow("Speed", self._factor)
         form.addRow("Time", self._clock)
+        form.addRow(self._roads)
 
     def factor(self):
         return self._factor.currentData()
 
     def clock_text(self):
         return self._clock.text()
+
+    def roads_shown(self):
+        return self._roads.isChecked()
+
+    def set_roads_available(self, available):
+        """Enable the street switch only when there are streets to show."""
+        self._roads.setEnabled(available)
 
     def set_playing(self, playing):
         """Reflect the play state in the button without re-firing it."""
@@ -79,5 +95,9 @@ class TrainPanel(QWidget):
     def _on_factor(self, _):
         if self.factor_changed is not None:
             self.factor_changed(self.factor())
+
+    def _on_roads(self, checked):
+        if self.roads_toggled is not None:
+            self.roads_toggled(checked)
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:
