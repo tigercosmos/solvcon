@@ -2,7 +2,8 @@
 # BSD 3-Clause License, see COPYING
 
 """
-Hexahedral slabs along reference lines, for drawing a map as solid geometry.
+Hexahedral slabs along odrcore reference lines, for drawing a map as solid
+geometry in the pilot 3D viewer.
 
 A 3D viewer that shades the boundary shell of a volume mesh cannot take a
 bare line or a bare triangle strip, so a track is built as a thin slab: the
@@ -10,11 +11,10 @@ reference line is sampled along s, each sample gives a cross section of
 four nodes (the left and right edges at the road height and ``thickness``
 below it), and consecutive sections are joined into one hexahedron.
 
-``ribbon`` returns plain arrays so it is testable without the solvcon
-extension; ``to_static_mesh`` turns them into a ``solvcon.StaticMesh``.
-``road_ribbons`` draws a road network instead: every road an open slab
-across its carriageway, sampled for all roads at once, and ``concat`` joins
-such arrays into one mesh.
+``ribbon`` returns plain arrays and ``to_static_mesh`` turns them into a
+``solvcon.StaticMesh``. ``road_ribbons`` draws a road network instead: every
+road an open slab across its carriageway, sampled for all roads at once, and
+``concat`` joins such arrays into one mesh.
 """
 
 from __future__ import annotations
@@ -23,8 +23,10 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from .geom import locate, poly3_values, refline_points
-from .model import Road
+from odrcore.geom import locate, poly3_values, refline_points
+from odrcore.model import Road
+
+from .core import StaticMesh
 
 Arrays = tuple[np.ndarray, np.ndarray]
 
@@ -179,11 +181,9 @@ def box() -> Arrays:
 def to_static_mesh(ndcrd: np.ndarray, clnds: np.ndarray):
     """Build a ``solvcon.StaticMesh`` of hexahedra from ``ribbon`` or ``box``
     output, with its interior, boundary and ghosts."""
-    import solvcon
-    mh = solvcon.StaticMesh(ndim=3, nnode=len(ndcrd), nface=0,
-                            ncell=len(clnds))
+    mh = StaticMesh(ndim=3, nnode=len(ndcrd), nface=0, ncell=len(clnds))
     mh.ndcrd.ndarray[:, :] = ndcrd
-    mh.cltpn.ndarray[:] = solvcon.StaticMesh.HEXAHEDRON
+    mh.cltpn.ndarray[:] = StaticMesh.HEXAHEDRON
     mh.clnds.ndarray[:, 0] = 8
     mh.clnds.ndarray[:, 1:9] = clnds
     mh.build_interior()

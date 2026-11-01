@@ -7,9 +7,11 @@ import numpy as np
 import pytest
 
 from odrcore.geom import Line, PiecewisePoly3, RefLine
-from odrcore.mesh import (box, carriageway, concat, ribbon, road_ribbon,
-                          road_ribbons, to_static_mesh)
 from odrcore.model import Boundary, Lane, LaneSection, Road, boundary_id
+
+from solvcon import StaticMesh
+from solvcon.odrmesh import (box, carriageway, concat, ribbon, road_ribbon,
+                             road_ribbons, to_static_mesh)
 
 
 def straight(road_id, x0, y0, hdg, length, z=0.0):
@@ -94,7 +96,6 @@ class TestRibbon:
 class TestStaticMesh:
 
     def test_joined_road_ribbons_build_a_hex_mesh(self):
-        pytest.importorskip('solvcon')
         roads = [laned('a', 0.0, 25.0, 0.5, [3.5], [3.0, 3.0]),
                  laned('b', 40.0, 20.0, 0.0, [2.0], [2.0])]
         mh = to_static_mesh(*concat([road_ribbon(r) for r in roads]))
@@ -104,10 +105,9 @@ class TestStaticMesh:
                                    + [10.0 * 4.0 * 0.3] * 2)
 
     def test_ribbon_builds_a_hex_mesh(self):
-        solvcon = pytest.importorskip('solvcon')
         mh = to_static_mesh(*ribbon(square_loop(), spacing=5.0))
         assert mh.ncell == 16 and mh.nnode == 64
-        assert (mh.cltpn.ndarray == solvcon.StaticMesh.HEXAHEDRON).all()
+        assert (mh.cltpn.ndarray == StaticMesh.HEXAHEDRON).all()
         body = mh.clvol.ndarray[mh.clvol.nghost:]
         np.testing.assert_allclose(body[CORNERS == 0], 7.5)
 

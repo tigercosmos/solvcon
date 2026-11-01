@@ -14,7 +14,7 @@ import re
 import time
 
 import odrcore
-from odrcore import mesh as odrmesh
+from ... import odrmesh
 
 __all__ = [
     'COLORS',
