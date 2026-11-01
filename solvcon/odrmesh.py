@@ -19,7 +19,7 @@ road an open slab across its carriageway, sampled for all roads at once, and
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Sequence
 
 import numpy as np
 
@@ -116,7 +116,7 @@ def carriageway(roads: Sequence[Road], owner: np.ndarray,
 
 
 def road_ribbons(roads: Sequence[Road], spacing: float = 10.0,
-                 half_width: Optional[float] = None,
+                 half_width: float | None = None,
                  thickness: float = 0.3) -> Arrays:
     """Return the node and hexahedron arrays of an open slab along every
     road of ``roads``, one after the other: across the carriageway from
@@ -154,7 +154,7 @@ def road_ribbons(roads: Sequence[Road], spacing: float = 10.0,
 
 
 def road_ribbon(road: Road, spacing: float = 10.0,
-                half_width: Optional[float] = None,
+                half_width: float | None = None,
                 thickness: float = 0.3) -> Arrays:
     """Return the node and hexahedron arrays of an open slab along one
     road, as :func:`road_ribbons` draws it."""
