@@ -257,7 +257,7 @@ class TestBatched:
             refline_points(lines, np.array([0, 1], dtype='int64'),
                            np.array([0.0, 1.0], dtype='float64'),
                            np.zeros(2, dtype='float64'))
-        # Stations on the other lines alone are fine.
+        # A batch that never reaches the planless line still evaluates.
         got = refline_points(lines, np.array([1], dtype='int64'),
                              np.array([1.0], dtype='float64'),
                              np.zeros(1, dtype='float64'))

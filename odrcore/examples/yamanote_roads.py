@@ -558,8 +558,8 @@ def node_offsets(m: Map, ways, geo: dict[str, tuple[dict, np.ndarray,
         return {nid: sign * v for nid, v in bound.items()}
 
     under, over = envelope(1.0), envelope(-1.0)
-    # under <= own <= over, and both keep to the grade, so does the value
-    # between them closest to the ground.
+    # under <= own <= over and both keep to the grade; so does the value
+    # between them closest to zero, the median of the three.
     return {nid: min(max(0.0, under[nid]), over[nid]) for nid in graph}
 
 
