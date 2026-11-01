@@ -528,6 +528,9 @@ def refline_points(lines: Sequence[RefLine], owner: np.ndarray,
     axes for several offsets at one station, which share one pose."""
     owner = np.asarray(owner, dtype='int64')
     s = np.asarray(s, dtype='float64')
+    planless = np.array([not line.plan for line in lines], dtype='bool')
+    if planless[owner].any():
+        raise ValueError('reference line has no plan view')
     flat = [g for line in lines for g in line.plan]
     gi = locate([[g.s0 for g in line.plan] for line in lines], owner, s)
     u, v, dh = (np.empty_like(s) for _ in range(3))

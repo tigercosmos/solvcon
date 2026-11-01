@@ -249,6 +249,21 @@ class TestBatched:
         want = [lines[k].point(v, w) for k, v, w in zip(owner, s, t)]
         np.testing.assert_allclose(got, want, rtol=0.0, atol=1e-10)
 
+    def test_a_line_without_plan_raises_as_point(self):
+        lines = [RefLine(), self.lines()[0]]
+        with pytest.raises(ValueError, match='no plan view'):
+            lines[0].point(0.0, 0.0)
+        with pytest.raises(ValueError, match='no plan view'):
+            refline_points(lines, np.array([0, 1], dtype='int64'),
+                           np.array([0.0, 1.0], dtype='float64'),
+                           np.zeros(2, dtype='float64'))
+        # Stations on the other lines alone are fine.
+        got = refline_points(lines, np.array([1], dtype='int64'),
+                             np.array([1.0], dtype='float64'),
+                             np.zeros(1, dtype='float64'))
+        np.testing.assert_allclose(got[0], lines[1].point(1.0, 0.0),
+                                   rtol=0.0, atol=1e-12)
+
     def test_trailing_offsets_share_a_pose(self):
         lines = self.lines()
         owner, s = self.stations(lines)
