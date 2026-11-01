@@ -2,6 +2,9 @@
 # BSD 3-Clause License, see COPYING
 
 
+import importlib.util
+import pathlib
+import tempfile
 import unittest
 
 from solvcon import testing
@@ -14,12 +17,40 @@ except ImportError:
     pilot = None
 
 
+def _load_synthetic_roads():
+    """Import the street map builder the scene tests share, which lives
+    with them rather than on the path of this directory."""
+    path = (pathlib.Path(__file__).parents[1] / 'apps' / 'yamanote'
+            / 'synthetic_roads.py')
+    spec = importlib.util.spec_from_file_location('synthetic_roads', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+synthetic_roads = _load_synthetic_roads()
+
+
 @testing.requires_live_window
 class YamanoteAppTC(unittest.TestCase):
+    """Run the app on the line map and the synthetic street map, so the
+    tests neither need nor wait for the full street map."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.roads_path = synthetic_roads.write_roads(pathlib.Path(
+            cls._tmp.name))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
     def setUp(self):
         self.mgr = pilot.RManager.instance.setUp()
         self.feature = _app.YamanoteApp(mgr=self.mgr)
         self.feature.populate_menu()
+        self.feature._scene = _scene.Scene(roads_path=self.roads_path)
 
     def tearDown(self):
         if self.feature._subwin is not None:
@@ -44,7 +75,58 @@ class YamanoteAppTC(unittest.TestCase):
         self.assertEqual(30 * _control.CAR_COUNT, len(cars))
         self.assertIn("train.Outer.03.car07", cars)
         wide = {feature.scene.wide_name(loop) for loop in _scene.LOOPS}
-        self.assertEqual(names, set(_scene.LOOPS) | wide | stops | cars)
+        roads = set(synthetic_roads.GROUPS)
+        self.assertEqual(names,
+                         set(_scene.LOOPS) | wide | stops | cars | roads)
+
+    def test_the_roads_switch_hides_every_street(self):
+        feature = self.feature
+        feature.run()
+        roads, panel = feature.roads, feature._dock.widget()
+        names = set(synthetic_roads.GROUPS)
+        self.assertEqual(names, set(roads.names))
+        self.assertTrue(names <= set(feature.viewer.objectNames()))
+        self.assertTrue(panel._roads.isEnabled())
+        self.assertTrue(panel.roads_shown())
+        feature.viewer.zoomCamera(40.0)
+        feature.control.update_lod()
+        self.assertEqual(dict.fromkeys(names, True), roads.shown)
+
+        panel._roads.setChecked(False)
+        self.assertEqual(dict.fromkeys(names, False), roads.shown)
+        panel._roads.setChecked(True)
+        self.assertEqual(dict.fromkeys(names, True), roads.shown)
+
+    def test_minor_streets_drop_out_from_afar(self):
+        feature = self.feature
+        feature.run()
+        control, roads = feature.control, feature.roads
+        self.assertTrue(control.update_lod(force=True))
+        self.assertTrue(control.lod_wide)
+        self.assertTrue(roads.wide)
+        minor = {name for name in roads.names
+                 if feature.scene.is_minor(name)}
+        self.assertEqual({'roads.JY01-JY02.minor', 'roads.JY02-JY03.minor'},
+                         minor)
+        self.assertEqual({name: name not in minor for name in roads.names},
+                         roads.shown)
+
+        feature.viewer.zoomCamera(40.0)
+        self.assertTrue(control.update_lod())
+        self.assertFalse(roads.wide)
+        self.assertTrue(all(roads.shown.values()))
+
+    def test_the_line_runs_without_a_street_map(self):
+        feature = self.feature
+        feature._scene = _scene.Scene(
+            roads_path=pathlib.Path(self._tmp.name) / 'missing.xodr')
+        feature.run()
+        self.assertIsNone(feature.roads)
+        self.assertFalse(feature._dock.widget()._roads.isEnabled())
+        names = set(feature.viewer.objectNames())
+        self.assertFalse({name for name in names
+                          if name.startswith('roads.')})
+        self.assertTrue(feature.control.update_lod(force=True))
 
     def test_every_station_is_labeled_once(self):
         feature = self.feature
