@@ -458,8 +458,9 @@ def _arc_lengths_to_params(du: Deriv, dv: Deriv, length: np.ndarray,
     rows = np.arange(len(s), dtype='int64')
     p = np.where(length > 0.0, s / np.where(length > 0.0, length, 1.0) * p_hi,
                  0.0)
+    span = np.maximum(p_hi, 1e-300)
     for _ in range(50):
-        k = np.clip(np.floor(p / p_hi * _PANELS), 0, _PANELS - 1)
+        k = np.clip(np.floor(p / span * _PANELS), 0, _PANELS - 1)
         k = k.astype('int64')
         f = cum[rows, k] + integral(edges[rows, k], p) - s
         g = np.hypot(du(p), dv(p))

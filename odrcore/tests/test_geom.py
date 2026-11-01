@@ -264,6 +264,16 @@ class TestBatched:
         np.testing.assert_allclose(got[0], lines[1].point(1.0, 0.0),
                                    rtol=0.0, atol=1e-12)
 
+    def test_zero_length_poly3_matches_point(self):
+        line = RefLine([Poly3(0.0, 0.0, 2.0, 1.0, 0.4, a=0.3, b=0.1,
+                              c=0.02)])
+        with np.errstate(invalid='raise', divide='raise'):
+            got = refline_points([line], np.zeros(1, dtype='int64'),
+                                 np.zeros(1, dtype='float64'),
+                                 np.full(1, 1.5, dtype='float64'))
+        np.testing.assert_allclose(got[0], line.point(0.0, 1.5), rtol=0.0,
+                                   atol=1e-12)
+
     def test_trailing_offsets_share_a_pose(self):
         lines = self.lines()
         owner, s = self.stations(lines)
