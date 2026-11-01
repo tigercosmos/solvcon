@@ -16,6 +16,7 @@ ATTR = r'(\w+)="([^"]*)"'
 EXAMPLES = pathlib.Path(odrcore.__file__).parent / 'examples'
 sys.path.insert(0, str(EXAMPLES))
 import _gsi  # noqa: E402
+import _osmroad  # noqa: E402
 import yamanote_roads  # noqa: E402
 
 
@@ -396,6 +397,21 @@ def test_bridge_meets_tunnel(base, loop):
     ranked = yamanote_roads.steepest(m)
     assert [road.id for _, road in ranked] in (['71', '72'], ['72', '71'])
     assert ranked[0][0] >= ranked[1][0]
+
+
+def test_structure_tags_said_no():
+    no = {'bridge': 'no', 'tunnel': 'false', 'embankment': '0',
+          'cutting': ''}
+    assert not any(_osmroad.tagged(no, key) for key in no)
+    assert _osmroad.tagged({'bridge': 'viaduct'}, 'bridge')
+    assert _osmroad.tagged({'tunnel': 'Yes'}, 'tunnel')
+    assert _osmroad.structure({'id': 1, 'tags': no}, 10.0) == ''
+    assert _gsi.structure_offset(no) == 0.0
+    assert _gsi.structure_offset({'cutting': 'no', 'embankment': 'yes'}) \
+        == _gsi.EMBANKMENT
+    bridge = {'bridge': 'viaduct', 'tunnel': 'no', 'layer': '2'}
+    assert '<bridge ' in _osmroad.structure({'id': 1, 'tags': bridge}, 10.0)
+    assert _gsi.structure_offset(bridge) == 2.0 * _gsi.VIADUCT
 
 
 def test_tile_cache(tmp_path):

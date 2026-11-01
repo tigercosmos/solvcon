@@ -86,15 +86,21 @@ def hermite(s0: float, p0, p1, t0, t1) -> ParamPoly3:
                       p_range='normalized')
 
 
+def tagged(tags: dict, key: str) -> bool:
+    """Whether an OSM tag such as ``bridge`` is set; ``no``, ``false``,
+    ``0`` and an empty value say it is not."""
+    return tags.get(key, '').strip().lower() not in ('', 'no', 'false', '0')
+
+
 def structure(way: dict, length: float, road_id: str = '') -> str:
     """The bridge or tunnel ``<objects>`` of a way, or of the road
     ``road_id`` cut from it."""
     tags = way['tags']
-    if tags.get('tunnel'):
+    if tagged(tags, 'tunnel'):
         kind = 'tunnel'
         typ = ('underpass' if tags['tunnel'] == 'building_passage'
                else 'standard')
-    elif tags.get('bridge'):
+    elif tagged(tags, 'bridge'):
         kind, typ = 'bridge', 'concrete'
     else:
         return ''
