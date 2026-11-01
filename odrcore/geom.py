@@ -403,8 +403,7 @@ def locate(starts: Sequence[Sequence[float]], owner: np.ndarray,
     flat = np.fromiter((v for st in starts for v in st), dtype='float64',
                        count=nflat)
     index = np.arange(len(starts), dtype='int64')
-    owners = np.concatenate([np.repeat(index, counts),
-                             owner])
+    owners = np.concatenate([np.repeat(index, counts), owner])
     keys = np.concatenate([flat, s])
     # A start ties ahead of a station at the same s, so a station on a
     # breakpoint takes the piece that begins there.
