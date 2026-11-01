@@ -165,6 +165,21 @@ def test_one_node_way_skipped(built):
     assert sorted(m.roads) == ['11', '12', '13', '15', '17']
 
 
+def test_coincident_pinned_nodes(loop):
+    p, nrm, tan = loop_frame(loop, 0.5 * (loop.stop_s[6] + loop.stop_s[7]))
+    o = p + 100.0 * nrm
+    geo, _ = on_ellipsoid(loop, {1: o, 2: o + 5e-4 * tan, 3: o + 30.0 * tan,
+                                 4: o + 60.0 * tan, 5: o + 60.0005 * tan})
+    way = osm_way(geo, 81, [1, 2, 3, 4, 5], highway='residential')
+    # Node 1 starts the piece and node 5 ends it; 2 and 4 are signals.
+    xy, ids = yamanote_roads.vertices(way, loop.plane, {1, 2, 4, 5})
+    assert (ids[0], ids[-1]) == (1, 5)
+    assert len(xy) == len(ids) == 3
+    # A free node at the place of a pinned one gives way to it.
+    xy, ids = yamanote_roads.vertices(way, loop.plane, {2, 4, 5})
+    assert ids == [2, 3, 5]
+
+
 def test_segment(built, loop):
     m, _, _ = built
     first, second = loop.codes[:2]
