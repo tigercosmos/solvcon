@@ -41,7 +41,9 @@ from odrcore.model import (Boundary, Frame, Header, Lane, LaneLink,
                            boundary_id)
 from odrcore.osm import LocalTangentPlane
 
-from _osmroad import fetch, hermite, structure, tangents, thin
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _osmroad import (fetch, hermite, structure, tangents,  # noqa: E402
+                      thin)
 
 OUTER, INNER = 1972920, 1972960
 TRACKS = ((OUTER, 'Outer'), (INNER, 'Inner'))

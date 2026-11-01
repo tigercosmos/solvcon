@@ -4,6 +4,7 @@
 import math
 import pathlib
 import re
+import subprocess
 import sys
 
 import numpy as np
@@ -412,6 +413,17 @@ def test_structure_tags_said_no():
     bridge = {'bridge': 'viaduct', 'tunnel': 'no', 'layer': '2'}
     assert '<bridge ' in _osmroad.structure({'id': 1, 'tags': bridge}, 10.0)
     assert _gsi.structure_offset(bridge) == 2.0 * _gsi.VIADUCT
+
+
+@pytest.mark.parametrize('name', ['yamanote', 'yamanote_elevation',
+                                  'yamanote_roads'])
+def test_generator_imports_as_module(name):
+    # A fresh interpreter, since this module already put the examples on
+    # the path.
+    root = str(EXAMPLES.parent.parent)
+    subprocess.run([sys.executable, '-I', '-c',
+                    f'import sys; sys.path.insert(0, {root!r}); '
+                    f'import odrcore.examples.{name}'], check=True)
 
 
 def test_tile_cache(tmp_path):
