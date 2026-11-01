@@ -36,7 +36,8 @@ def _sections(road: Road, spacing: float, half_width: float,
     """Return the ``(n, 4, 3)`` cross sections along the road, ordered left
     top, right top, right bottom, left bottom."""
     n = max(int(road.length // spacing), 1)
-    stations = list(np.linspace(0.0, road.length, n, endpoint=False))
+    stations = list(np.linspace(0.0, road.length, n, endpoint=False,
+                                dtype='float64'))
     if with_end:
         stations.append(road.length)
     out = np.empty((len(stations), 4, 3), dtype='float64')
