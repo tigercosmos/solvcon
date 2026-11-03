@@ -5,8 +5,8 @@
 """
 The Yamanote Line as solid geometry: the two loops as slab meshes and the
 stations as points along them, and the streets around the line as slabs
-across their carriageways when their map is there. Qt-free, so the scene
-builds headlessly.
+across their carriageways when their map is there, with their lane marks,
+crosswalks and traffic signals. Qt-free, so the scene builds headlessly.
 """
 
 import pathlib
@@ -20,6 +20,7 @@ from ... import odrmesh
 
 __all__ = [
     'COLORS',
+    'DETAIL_KINDS',
     'MAP_PATH',
     'ROADS_PATH',
     'STATION_SIZE',
@@ -42,6 +43,16 @@ COLORS = {
 }
 #: A stop marker box in meters: x, y, z.
 STATION_SIZE = (30.0, 30.0, 12.0)
+#: The details drawn on the streets of each segment: the kind, the object
+#: name with the segment for ``{}``, and the :class:`Scene` method that
+#: builds the arrays from the segment and the extra arguments.
+DETAIL_KINDS = (
+    ('marks.white', 'marks.{}.white', 'mark_arrays', ('white',)),
+    ('marks.yellow', 'marks.{}.yellow', 'mark_arrays', ('yellow',)),
+    ('crosswalks', 'crosswalks.{}', 'crosswalk_arrays', ()),
+    ('signals.heads', 'signals.{}.heads', 'signal_arrays', ('heads',)),
+    ('signals.poles', 'signals.{}.poles', 'signal_arrays', ('poles',)),
+)
 
 
 class Station(object):
@@ -69,6 +80,7 @@ class Scene(object):
     :ivar road_groups: The streets by object name,
         ``roads.<segment>.major`` or ``roads.<segment>.minor``, where the
         segment is the pair of stations a street lies by.
+    :ivar segments: The streets of both classes by segment.
     :ivar roads_seconds: The seconds loading the street map took.
     """
 
@@ -79,6 +91,18 @@ class Scene(object):
     WIDE_HALF_WIDTH = 13.0
     ROAD_SPACING = 10.0
     ROAD_THICKNESS = 0.3
+    #: The marks sample the boundaries as the slabs do their streets.
+    MARK_SPACING = 10.0
+    #: The gap of the top of a mark over the street, and its thickness.
+    MARK_LIFT = 0.05
+    MARK_THICKNESS = 0.03
+    #: A crosswalk tops the marks it crosses.
+    CROSSWALK_LIFT = 0.08
+    CROSSWALK_THICKNESS = 0.03
+    #: A signal head in meters, along the way it faces, across and up; its
+    #: bottom sits on top of the pole.
+    SIGNAL_HEAD_SIZE = (0.4, 1.2, 0.4)
+    SIGNAL_POLE_SIZE = (0.15, 0.15, 5.0)
 
     def __init__(self, path=MAP_PATH, roads_path=None):
         self.map = odrcore.load(path)
@@ -86,17 +110,19 @@ class Scene(object):
         self.stations = [st for loop in LOOPS for st in self._stops(loop)]
         if roads_path is None:
             roads_path = ROADS_PATH
-        self.roads_map, self.road_groups = None, {}
+        self.roads_map, self.road_groups, self.segments = None, {}, {}
         self.roads_seconds = 0.0
+        self._detail_groups, self._detail_arrays = None, {}
         if pathlib.Path(roads_path).exists():
             start = time.perf_counter()
             self.roads_map = odrcore.load(roads_path)
             self.roads_seconds = time.perf_counter() - start
-            self.road_groups = self._group(self.roads_map.roads.values())
+            self.road_groups, self.segments = self._group(
+                self.roads_map.roads.values())
 
     @staticmethod
     def _group(roads):
-        groups = {}
+        groups, segments = {}, {}
         for road in roads:
             data = dict(user_data(road.attrs.get('userData')))
             segment = data.get('segment', 'other')
@@ -104,11 +130,40 @@ class Scene(object):
                      in MAJOR_HIGHWAYS)
             name = f'roads.{segment}.{"major" if major else "minor"}'
             groups.setdefault(name, []).append(road)
-        return dict(sorted(groups.items()))
+            segments.setdefault(segment, []).append(road)
+        return dict(sorted(groups.items())), dict(sorted(segments.items()))
 
     @property
     def road_count(self):
         return sum(len(roads) for roads in self.road_groups.values())
+
+    @property
+    def signal_count(self):
+        return 0 if self.roads_map is None else len(self.roads_map.signals)
+
+    @property
+    def crosswalk_count(self):
+        return sum(obj.type == 'crosswalk'
+                   for roads in self.segments.values() for road in roads
+                   for obj in road.objects)
+
+    @property
+    def detail_groups(self):
+        """The detail objects with any cell by name, ``marks.<segment>.white``
+        and the others of :data:`DETAIL_KINDS`, each to its kind. The first
+        access builds the arrays of every detail and keeps them for
+        :meth:`detail_mesh`."""
+        if self._detail_groups is None:
+            groups = {}
+            for segment in self.segments:
+                for kind, pattern, method, args in DETAIL_KINDS:
+                    arrays = getattr(self, method)(segment, *args)
+                    if len(arrays[1]):
+                        name = pattern.format(segment)
+                        groups[name] = kind
+                        self._detail_arrays[name] = arrays
+            self._detail_groups = dict(sorted(groups.items()))
+        return self._detail_groups
 
     @staticmethod
     def is_minor(group):
@@ -154,6 +209,51 @@ class Scene(object):
 
     def road_mesh(self, group):
         return odrmesh.to_static_mesh(*self.road_arrays(group))
+
+    def mark_arrays(self, segment, color):
+        """Return the node and hexahedron arrays of the lane marks of
+        ``color``, ``'white'`` or ``'yellow'``, on the streets of
+        ``segment``, :attr:`MARK_LIFT` above the surface."""
+        return odrmesh.mark_ribbons(self.segments[segment], color,
+                                    self.MARK_SPACING, self.MARK_LIFT,
+                                    self.MARK_THICKNESS)
+
+    def mark_mesh(self, segment, color):
+        return odrmesh.to_static_mesh(*self.mark_arrays(segment, color))
+
+    def crosswalk_arrays(self, segment):
+        """Return the node and hexahedron arrays of a flat box for each
+        crosswalk on the streets of ``segment``."""
+        return odrmesh.crosswalk_boxes(self.segments[segment],
+                                       self.CROSSWALK_LIFT,
+                                       self.CROSSWALK_THICKNESS)
+
+    def crosswalk_mesh(self, segment):
+        return odrmesh.to_static_mesh(*self.crosswalk_arrays(segment))
+
+    def signal_arrays(self, segment, part):
+        """Return the node and hexahedron arrays of one ``part`` of every
+        traffic signal on the streets of ``segment``: ``'poles'`` stand at
+        the signals, ``'heads'`` sit on top of them, both turned the way
+        the signal faces."""
+        feet, heading = odrmesh.signal_poses(self.segments[segment])
+        pole = self.SIGNAL_POLE_SIZE
+        if part == 'poles':
+            size, rise = pole, 0.5 * pole[2]
+        else:
+            size = self.SIGNAL_HEAD_SIZE
+            rise = pole[2] + 0.5 * size[2]
+        centers = feet + (0.0, 0.0, rise)
+        return odrmesh.boxes(centers, [size] * len(feet), heading)
+
+    def signal_mesh(self, segment, part):
+        return odrmesh.to_static_mesh(*self.signal_arrays(segment, part))
+
+    def detail_mesh(self, name):
+        """Return the mesh of one object of :attr:`detail_groups`."""
+        if name not in self.detail_groups:
+            raise KeyError(name)
+        return odrmesh.to_static_mesh(*self._detail_arrays[name])
 
     @staticmethod
     def marker_mesh():
