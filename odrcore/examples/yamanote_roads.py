@@ -96,7 +96,8 @@ import odrcore
 from odrcore.geom import PiecewisePoly3
 from odrcore.model import (Boundary, Connection, End, Frame, Header,
                            Junction, Lane, LaneSection, Map, MarkSegment,
-                           Road, RoadLink, Signal, SpeedLimit, boundary_id)
+                           Road, RoadLink, RoadObject, Signal, SpeedLimit,
+                           boundary_id)
 from odrcore.osm import LocalTangentPlane, origin_of
 from odrcore.parse import user_data as read_user_data
 from odrcore.topology import loop_chain
@@ -634,12 +635,11 @@ def traffic_lights(road: Road, s: float, nid: int,
     return out
 
 
-def crosswalk(road: Road, s: float, nid: int) -> str:
+def crosswalk(road: Road, s: float, nid: int) -> RoadObject:
     left, right = edges(road)
-    return (f'<object id="cw{nid}" type="crosswalk" s="{s!r}" '
-            f't="{0.5 * (left.t(s) + right.t(s))!r}" zOffset="0.0" '
-            f'orientation="none" hdg="0.0" length="{CROSSWALK_LENGTH!r}" '
-            f'width="{left.t(s) - right.t(s)!r}"/>')
+    return RoadObject(f'cw{nid}', road, s, 0.5 * (left.t(s) + right.t(s)),
+                      type='crosswalk', length=CROSSWALK_LENGTH,
+                      width=left.t(s) - right.t(s))
 
 
 def make_road(rid: str, way: dict, xy: np.ndarray, tan: np.ndarray,
@@ -660,18 +660,15 @@ def make_road(rid: str, way: dict, xy: np.ndarray, tan: np.ndarray,
     road.length = s
     add_lanes(road, tags)
 
-    objects = ''
     for kind, s, nid in marks:
         if kind == 'signal':
             road.signals += traffic_lights(road, s, nid,
                                            len(carriers[nid]) > 1)
         elif carriers[nid][0] == rid:
-            objects += crosswalk(road, s, nid)
-    # The schema puts <object> before <bridge> and <tunnel>.
-    objects += structure(way, road.length, rid).removeprefix(
-        '<objects>').removesuffix('</objects>')
-    if objects:
-        road.attrs['_unknown'] = f'<objects>{objects}</objects>'
+            road.objects.append(crosswalk(road, s, nid))
+    bridge = structure(way, road.length, rid)
+    if bridge is not None:
+        road.structures.append(bridge)
     middle = road.refline.point(0.5 * road.length, 0.0)[:2]
     road.attrs['userData'] = user_data(
         way, loop.segment(loop.project(middle)))
@@ -898,8 +895,8 @@ def main(argv: list[str]) -> int:
             print(f'steepest: road {road.id}, {100.0 * grade:.0f}% over '
                   f'{road.length:.1f} m, z {elev(0.0):.2f} to '
                   f'{elev(road.length):.2f} m')
-    crosswalks = sum(r.attrs.get('_unknown', '').count('"crosswalk"')
-                     for r in m.roads.values())
+    crosswalks = sum(obj.type == 'crosswalk' for r in m.roads.values()
+                     for obj in r.objects)
     print(f'{len(m.signals)} traffic lights, {crosswalks} crosswalks')
     print(f'left out {outside} ways farther than {RADIUS:g} m')
     if skipped:
