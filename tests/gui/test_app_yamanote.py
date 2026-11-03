@@ -76,28 +76,56 @@ class YamanoteAppTC(unittest.TestCase):
         self.assertIn("train.Outer.03.car07", cars)
         wide = {feature.scene.wide_name(loop) for loop in _scene.LOOPS}
         roads = set(synthetic_roads.GROUPS)
-        self.assertEqual(names,
-                         set(_scene.LOOPS) | wide | stops | cars | roads)
+        details = set(synthetic_roads.DETAILS)
+        self.assertEqual(names, set(_scene.LOOPS) | wide | stops | cars
+                         | roads | details)
 
-    def test_the_roads_switch_hides_every_street(self):
+    def _near(self):
+        """Run the app with the eye close enough for every detail."""
         feature = self.feature
         feature.run()
-        roads, panel = feature.roads, feature._dock.widget()
-        names = set(synthetic_roads.GROUPS)
-        self.assertEqual(names, set(roads.names))
-        self.assertTrue(names <= set(feature.viewer.objectNames()))
-        self.assertTrue(panel._roads.isEnabled())
-        self.assertTrue(panel.roads_shown())
         feature.viewer.zoomCamera(40.0)
         feature.control.update_lod()
+        return feature.roads, feature._dock.widget()
+
+    def test_the_roads_switch_hides_every_street(self):
+        roads, panel = self._near()
+        names = set(synthetic_roads.GROUPS) | set(synthetic_roads.DETAILS)
+        self.assertEqual(names, set(roads.names))
+        self.assertTrue(names <= set(self.feature.viewer.objectNames()))
+        self.assertTrue(panel._roads.isEnabled())
+        self.assertTrue(panel.roads_shown())
         self.assertEqual(dict.fromkeys(names, True), roads.shown)
 
         panel._roads.setChecked(False)
-        self.assertEqual(dict.fromkeys(names, False), roads.shown)
+        streets = set(synthetic_roads.GROUPS)
+        self.assertEqual({name: name not in streets for name in names},
+                         roads.shown)
         panel._roads.setChecked(True)
         self.assertEqual(dict.fromkeys(names, True), roads.shown)
 
-    def test_minor_streets_drop_out_from_afar(self):
+    def test_the_detail_switches_hide_their_kinds(self):
+        roads, panel = self._near()
+        self.assertTrue(panel._marks.isEnabled())
+        self.assertTrue(panel._signals.isEnabled())
+        self.assertTrue(panel.marks_shown() and panel.signals_shown())
+        kinds = synthetic_roads.DETAILS
+
+        panel._marks.setChecked(False)
+        self.assertFalse(panel.marks_shown())
+        hidden = {name for name, shown in roads.shown.items() if not shown}
+        self.assertEqual({name for name, kind in kinds.items()
+                          if kind.startswith(('marks.', 'crosswalks'))},
+                         hidden)
+        panel._marks.setChecked(True)
+        panel._signals.setChecked(False)
+        hidden = {name for name, shown in roads.shown.items() if not shown}
+        self.assertEqual({'signals.JY01-JY02.heads',
+                          'signals.JY01-JY02.poles'}, hidden)
+        panel._signals.setChecked(True)
+        self.assertTrue(all(roads.shown.values()))
+
+    def test_minor_streets_and_details_drop_out_from_afar(self):
         feature = self.feature
         feature.run()
         control, roads = feature.control, feature.roads
@@ -108,7 +136,8 @@ class YamanoteAppTC(unittest.TestCase):
                  if feature.scene.is_minor(name)}
         self.assertEqual({'roads.JY01-JY02.minor', 'roads.JY02-JY03.minor'},
                          minor)
-        self.assertEqual({name: name not in minor for name in roads.names},
+        major = {'roads.JY01-JY02.major', 'roads.JY02-JY03.major'}
+        self.assertEqual({name: name in major for name in roads.names},
                          roads.shown)
 
         feature.viewer.zoomCamera(40.0)
@@ -122,10 +151,13 @@ class YamanoteAppTC(unittest.TestCase):
             roads_path=pathlib.Path(self._tmp.name) / 'missing.xodr')
         feature.run()
         self.assertIsNone(feature.roads)
-        self.assertFalse(feature._dock.widget()._roads.isEnabled())
+        panel = feature._dock.widget()
+        self.assertFalse(panel._roads.isEnabled())
+        self.assertFalse(panel._marks.isEnabled())
+        self.assertFalse(panel._signals.isEnabled())
         names = set(feature.viewer.objectNames())
-        self.assertFalse({name for name in names
-                          if name.startswith('roads.')})
+        self.assertFalse({name for name in names if name.startswith(
+            ('roads.', 'marks.', 'crosswalks.', 'signals.'))})
         self.assertTrue(feature.control.update_lod(force=True))
 
     def test_every_station_is_labeled_once(self):
