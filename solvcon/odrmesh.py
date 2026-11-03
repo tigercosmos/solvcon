@@ -14,7 +14,10 @@ below it), and consecutive sections are joined into one hexahedron.
 ``ribbon`` returns plain arrays and ``to_static_mesh`` turns them into a
 ``solvcon.StaticMesh``. ``road_ribbons`` draws a road network instead: every
 road an open slab across its carriageway, sampled for all roads at once, and
-``concat`` joins such arrays into one mesh.
+``concat`` joins such arrays into one mesh. The details on the roads are
+hexahedra too: ``mark_ribbons`` lays a thin slab along each painted lane
+boundary, and ``boxes`` bakes many small boxes into one mesh, posed by
+``signal_poses`` and ``object_poses`` as ``crosswalk_boxes`` does.
 """
 
 from __future__ import annotations
@@ -24,11 +27,20 @@ from typing import Sequence
 import numpy as np
 
 from odrcore.geom import locate, poly3_values, refline_points
-from odrcore.model import Road
+from odrcore.model import Road, RoadObject
 
 from .core import StaticMesh
 
 Arrays = tuple[np.ndarray, np.ndarray]
+#: The road mark types :func:`mark_ribbons` draws.
+MARK_TYPES = ('solid', 'broken')
+#: The width of a road mark that does not give one, in meters.
+MARK_WIDTH = 0.15
+
+
+def _empty() -> Arrays:
+    return (np.empty((0, 3), dtype='float64'),
+            np.empty((0, 8), dtype='int32'))
 
 
 def _sections(road: Road, spacing: float, half_width: float,
@@ -116,6 +128,35 @@ def carriageway(roads: Sequence[Road], owner: np.ndarray,
     return lo, hi
 
 
+def _chains(lo: np.ndarray, hi: np.ndarray,
+            nseg: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return the owner chain and the station ``s`` of every section of the
+    chains from ``lo`` to ``hi`` in ``nseg`` equal steps, one after the
+    other, and the sections that start a cell: all but the last of each."""
+    owner = np.repeat(np.arange(len(lo), dtype='int64'), nseg + 1)
+    start = np.concatenate([[0], np.cumsum(nseg + 1)[:-1]]).astype('int64')
+    k = np.arange(len(owner), dtype='int64') - start[owner]
+    s = np.where(k == nseg[owner], hi[owner],
+                 lo[owner] + k * ((hi - lo) / nseg)[owner])
+    first = np.setdiff1d(np.arange(len(s), dtype='int64'), start + nseg,
+                         assume_unique=True)
+    return owner, s, first
+
+
+def _slab(roads: Sequence[Road], owner: np.ndarray, s: np.ndarray,
+          left: np.ndarray, right: np.ndarray, thickness: float,
+          lift: float = 0.0) -> np.ndarray:
+    """Return the ``(n, 4, 3)`` cross sections, ordered as ``_sections``
+    orders them, from offset ``left`` to ``right`` of ``roads[owner]`` at
+    ``s``, the top ``lift`` above the road surface."""
+    top = refline_points([road.refline for road in roads], owner, s,
+                         np.stack([left, right], axis=1))
+    sections = np.concatenate([top, top[:, ::-1]], axis=1)
+    sections[:, :, 2] += lift
+    sections[:, 2:, 2] -= thickness
+    return sections
+
+
 def road_ribbons(roads: Sequence[Road], spacing: float = 10.0,
                  half_width: float | None = None,
                  thickness: float = 0.3) -> Arrays:
@@ -129,28 +170,88 @@ def road_ribbons(roads: Sequence[Road], spacing: float = 10.0,
         roads = [road for road in roads
                  if any(sec.center is not None for sec in road.sections)]
     if not roads:
-        return (np.empty((0, 3), dtype='float64'),
-                np.empty((0, 8), dtype='int32'))
+        return _empty()
     length = np.array([road.length for road in roads], dtype='float64')
     nseg = np.maximum((length // spacing).astype('int64'), 1)
-    owner = np.repeat(np.arange(len(roads), dtype='int64'), nseg + 1)
-    start = np.concatenate([[0], np.cumsum(nseg + 1)[:-1]])
-    k = np.arange(len(owner), dtype='int64') - start[owner]
-    s = np.where(k == nseg[owner], length[owner],
-                 k * (length / nseg)[owner])
+    owner, s, first = _chains(np.zeros_like(length), length, nseg)
 
     lo, hi = carriageway(roads, owner, s)
     if half_width is not None:
         mid = 0.5 * (lo + hi)
         lo, hi = mid - half_width, mid + half_width
-    top = refline_points([road.refline for road in roads], owner, s,
-                         np.stack([hi, lo], axis=1))
-    sections = np.concatenate([top, top[:, ::-1]], axis=1)
-    sections[:, 2:, 2] -= thickness
+    sections = _slab(roads, owner, s, hi, lo, thickness)
+    return sections.reshape(-1, 3), _hexes(first, len(s))
 
-    last = start + nseg
-    first = np.setdiff1d(np.arange(len(s), dtype='int64'), last,
-                         assume_unique=True)
+
+def _mark_spans(roads: Sequence[Road], colors: set[str]):
+    """Yield the road index, the boundary, the mark and the start and end
+    s of every mark of ``roads`` in ``colors`` of a type in
+    :data:`MARK_TYPES`."""
+    for k, road in enumerate(roads):
+        for sec in road.sections:
+            if sec.center is None:
+                continue
+            for bnd in sec.boundaries():
+                ends = [sec.s0 + mk.s_offset for mk in bnd.marks[1:]]
+                for mk, end in zip(bnd.marks, ends + [sec.s1]):
+                    if mk.color in colors and mk.type in MARK_TYPES:
+                        yield k, bnd, mk, sec.s0 + mk.s_offset, end
+
+
+def _painted(roads: Sequence[Road], color: str,
+             dash: tuple[float, float]) -> tuple[list, list, np.ndarray]:
+    """Return the road index and the boundary of every painted stretch of
+    the marks of ``color``, and their ``(n, 3)`` start s, end s and
+    width."""
+    colors = {color, 'standard'} if color == 'white' else {color}
+    owner, bnds, rows = [], [], []
+    for k, bnd, mk, start, end in _mark_spans(roads, colors):
+        if end <= start:
+            continue
+        if mk.type == 'broken':
+            # No dash shorter than a micrometer at the end.
+            lo = np.arange(start, end - 1e-6, dash[0] + dash[1],
+                           dtype='float64')
+            hi = np.minimum(lo + dash[0], end)
+        else:
+            lo = np.array([start], dtype='float64')
+            hi = np.array([end], dtype='float64')
+        width = MARK_WIDTH if mk.width is None else mk.width
+        owner += [k] * len(lo)
+        bnds += [bnd] * len(lo)
+        rows.append(np.stack([lo, hi, np.full_like(lo, width)], axis=1))
+    table = np.concatenate(rows) if rows \
+        else np.empty((0, 3), dtype='float64')
+    return owner, bnds, table
+
+
+def mark_ribbons(roads: Sequence[Road], color: str, spacing: float = 2.0,
+                 lift: float = 0.02, thickness: float = 0.02,
+                 dash: tuple[float, float] = (3.0, 6.0)) -> Arrays:
+    """Return the node and hexahedron arrays of a thin slab along every lane
+    boundary of ``roads`` painted ``color`` (``'white'``, which also takes
+    the OpenDRIVE ``'standard'``, or ``'yellow'``): the mark's width
+    centered on the boundary, the top ``lift`` above the road surface and
+    ``thickness`` below that.
+
+    A mark runs from its start to the next mark of the boundary or the end
+    of its lane section. A ``solid`` mark paints all of it, a ``broken``
+    one ``dash[0]`` meters out of every ``dash[0] + dash[1]`` from its
+    start, the last dash cut at its end, and every other type is left
+    out. Each painted stretch, a solid mark or one dash, is an open chain
+    of its own with sections at most ``spacing`` apart, so the ends of a
+    dash are always sections and no cell spans a gap."""
+    owner, bnds, table = _painted(roads, color, dash)
+    if not len(table):
+        return _empty()
+    lo, hi, width = table.T
+    nseg = np.maximum(np.ceil((hi - lo) / spacing - 1e-9), 1)
+    piece, s, first = _chains(lo, hi, nseg.astype('int64'))
+
+    t = poly3_values([bnd.t for bnd in bnds], piece, s)
+    half = 0.5 * width[piece]
+    road = np.array(owner, dtype='int64')[piece]
+    sections = _slab(roads, road, s, t + half, t - half, thickness, lift)
     return sections.reshape(-1, 3), _hexes(first, len(s))
 
 
@@ -167,8 +268,7 @@ def concat(parts: Sequence[Arrays]) -> Arrays:
     connectivity of each part past the nodes of the parts before it."""
     parts = list(parts)
     if not parts:
-        return (np.empty((0, 3), dtype='float64'),
-                np.empty((0, 8), dtype='int32'))
+        return _empty()
     sizes = [len(ndcrd) for ndcrd, _ in parts]
     offsets = np.concatenate([[0], np.cumsum(sizes)[:-1]])
     ndcrd = np.concatenate([nd for nd, _ in parts])
@@ -182,6 +282,93 @@ def box() -> Arrays:
                       for x, y in ((-0.5, -0.5), (0.5, -0.5), (0.5, 0.5),
                                    (-0.5, 0.5))], dtype='float64')
     return ndcrd, np.arange(8, dtype='int32').reshape(1, 8)
+
+
+def boxes(centers: np.ndarray, sizes: np.ndarray,
+          headings: np.ndarray) -> Arrays:
+    """Return the node and hexahedron arrays of ``n`` boxes, the unit cube
+    of :func:`box` scaled by ``sizes`` ``(n, 3)`` along x, y and z, turned
+    by ``headings`` ``(n,)`` in radians counterclockwise about z and moved
+    to ``centers`` ``(n, 3)``. Box ``i`` has nodes ``8 i`` to ``8 i + 7``
+    in the order of :func:`box`."""
+    centers = np.asarray(centers, dtype='float64').reshape(-1, 3)
+    sizes = np.asarray(sizes, dtype='float64').reshape(-1, 3)
+    headings = np.asarray(headings, dtype='float64').reshape(-1)
+    nodes = box()[0][None] * sizes[:, None, :]
+    cos, sin = np.cos(headings)[:, None], np.sin(headings)[:, None]
+    x, y = nodes[..., 0], nodes[..., 1]
+    nodes = np.stack([x * cos - y * sin, x * sin + y * cos, nodes[..., 2]],
+                     axis=-1) + centers[:, None, :]
+    clnds = np.arange(8 * len(centers), dtype='int32').reshape(-1, 8)
+    return nodes.reshape(-1, 3), clnds
+
+
+def _poses(roads: Sequence[Road], owner: np.ndarray, s: np.ndarray,
+           t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return the points ``(n, 3)`` at ``(s, t)`` of ``roads[owner]`` and
+    the heading ``(n,)`` of the reference line there."""
+    if not len(owner):
+        return (np.empty((0, 3), dtype='float64'),
+                np.empty(0, dtype='float64'))
+    pts = refline_points([road.refline for road in roads], owner, s,
+                         np.stack([t, t + 1.0], axis=1))
+    # The offset runs along the left normal (-sin hdg, cos hdg), scaled by
+    # the cosine of the superelevation, which is positive.
+    across = pts[:, 1] - pts[:, 0]
+    return pts[:, 0], np.arctan2(-across[:, 0], across[:, 1])
+
+
+def signal_poses(roads: Sequence[Road]) -> tuple[np.ndarray, np.ndarray]:
+    """Return the foot ``(n, 3)`` and the heading ``(n,)`` of every signal
+    of ``roads``, road by road in their order: the road surface at its
+    ``(s, t)`` raised by its ``z_offset``, and the heading of the reference
+    line there, turned by pi for orientation ``'-'`` and by its
+    ``h_offset``."""
+    sigs = [(k, sig) for k, road in enumerate(roads) for sig in road.signals]
+    owner = np.array([k for k, _ in sigs], dtype='int64')
+    s, t, z, turn = (np.array([getattr(sig, name) for _, sig in sigs],
+                              dtype='float64')
+                     for name in ('s', 't', 'z_offset', 'h_offset'))
+    back = np.array([sig.orientation == '-' for _, sig in sigs],
+                    dtype='bool')
+    feet, heading = _poses(roads, owner, s, t)
+    feet[:, 2] += z
+    return feet, heading + turn + np.where(back, np.pi, 0.0)
+
+
+def object_poses(roads: Sequence[Road], type: str
+                 ) -> tuple[list[RoadObject], np.ndarray, np.ndarray]:
+    """Return the objects of ``roads`` of ``type``, road by road, their foot
+    ``(n, 3)``, the road surface at ``(s, t)`` raised by ``z_offset``, and
+    their heading ``(n,)``, that of the reference line there plus
+    ``hdg``."""
+    found = [(k, obj) for k, road in enumerate(roads)
+             for obj in road.objects if obj.type == type]
+    objs = [obj for _, obj in found]
+    owner = np.array([k for k, _ in found], dtype='int64')
+    s, t, z, hdg = (np.array([getattr(obj, name) for obj in objs],
+                             dtype='float64')
+                    for name in ('s', 't', 'z_offset', 'hdg'))
+    feet, heading = _poses(roads, owner, s, t)
+    feet[:, 2] += z
+    return objs, feet, heading + hdg
+
+
+def crosswalk_boxes(roads: Sequence[Road], lift: float = 0.02,
+                    thickness: float = 0.02) -> Arrays:
+    """Return the node and hexahedron arrays of a flat box for every
+    ``crosswalk`` object of ``roads`` with a length and a width: its
+    ``length`` along its heading, its ``width`` across and ``thickness``
+    high, the top ``lift`` above its foot."""
+    objs, feet, heading = object_poses(roads, 'crosswalk')
+    sized = np.array([obj.length is not None and obj.width is not None
+                      for obj in objs], dtype='bool').reshape(-1)
+    sizes = np.array([(obj.length, obj.width, thickness)
+                      for obj, keep in zip(objs, sized) if keep],
+                     dtype='float64').reshape(-1, 3)
+    feet = feet[sized]
+    feet[:, 2] += lift - 0.5 * thickness
+    return boxes(feet, sizes, heading[sized])
 
 
 def to_static_mesh(ndcrd: np.ndarray, clnds: np.ndarray):

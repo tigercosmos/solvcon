@@ -6,12 +6,15 @@ import math
 import numpy as np
 import pytest
 
-from odrcore.geom import Line, PiecewisePoly3, RefLine
-from odrcore.model import Boundary, Lane, LaneSection, Road, boundary_id
+from odrcore.geom import Arc, Line, PiecewisePoly3, RefLine
+from odrcore.model import (Boundary, Lane, LaneSection, MarkSegment, Road,
+                           RoadObject, Signal, boundary_id)
 
 from solvcon import StaticMesh
-from solvcon.odrmesh import (box, carriageway, concat, ribbon, road_ribbon,
-                             road_ribbons, to_static_mesh)
+from solvcon.odrmesh import (box, boxes, carriageway, concat,
+                             crosswalk_boxes, mark_ribbons, object_poses,
+                             ribbon, road_ribbon, road_ribbons,
+                             signal_poses, to_static_mesh)
 
 
 def straight(road_id, x0, y0, hdg, length, z=0.0):
@@ -174,6 +177,203 @@ class TestRoadRibbon:
     def test_no_roads_give_empty_arrays(self):
         ndcrd, clnds = road_ribbons([])
         assert ndcrd.shape == (0, 3) and clnds.shape == (0, 8)
+
+
+def painted(road_id='a', length=30.0, grade=0.0):
+    """A two-way road along x with a solid yellow center line, broken white
+    lines between its two lanes of each side and solid white edges."""
+    road = laned(road_id, 0.0, length, 0.0, [3.0, 3.0], [3.0, 3.0],
+                 grade=grade)
+    sec = road.sections[0]
+    sec.center.marks = [MarkSegment(0.0, 'solid', color='yellow',
+                                    width=0.3)]
+    for side in (sec.left, sec.right):
+        side[0].outer.marks = [MarkSegment(0.0, 'broken', color='white')]
+        side[1].outer.marks = [MarkSegment(0.0, 'solid', color='white',
+                                           width=0.2)]
+    return road
+
+
+def spans(ndcrd, clnds):
+    """The x ranges the cells cover, overlapping or touching ones joined,
+    so a gap in the paint is a gap between two spans."""
+    cells = ndcrd[clnds]
+    ranges = sorted(zip(cells[:, :, 0].min(axis=1),
+                        cells[:, :, 0].max(axis=1)))
+    out = [list(ranges[0])]
+    for lo, hi in ranges[1:]:
+        if lo <= out[-1][1] + 1e-9:
+            out[-1][1] = max(out[-1][1], hi)
+        else:
+            out.append([lo, hi])
+    return out
+
+
+def at_offset(ndcrd, clnds, t):
+    """The cells centered on lateral offset ``t``."""
+    middle = ndcrd[clnds][:, :, 1].mean(axis=1)
+    return clnds[np.abs(middle - t) < 1e-9]
+
+
+class TestMarkRibbons:
+
+    def test_a_broken_line_paints_dashes_and_skips_gaps(self):
+        road = painted(length=30.0)
+        ndcrd, clnds = mark_ribbons([road], 'white', spacing=2.0,
+                                    dash=(3.0, 6.0))
+        left = at_offset(ndcrd, clnds, 3.0)
+        # Dashes of 3 m start every 9 m: at 0, 9, 18 and 27, the last
+        # one ending with the road.
+        np.testing.assert_allclose(spans(ndcrd, left),
+                                   [[0, 3], [9, 12], [18, 21], [27, 30]],
+                                   atol=1e-9)
+        # Each dash is two cells of 1.5 m; none spans a gap.
+        assert len(left) == 8
+        volumes = [hex_volume(ndcrd, cell) for cell in left]
+        np.testing.assert_allclose(volumes, 1.5 * 0.15 * 0.02)
+
+    def test_a_solid_line_runs_the_whole_mark(self):
+        road = painted(length=30.0)
+        ndcrd, clnds = mark_ribbons([road], 'white', spacing=2.0)
+        edge = at_offset(ndcrd, clnds, -6.0)
+        assert len(edge) == 15
+        np.testing.assert_allclose(spans(ndcrd, edge), [[0.0, 30.0]])
+        np.testing.assert_allclose(sorted(set(ndcrd[edge][:, :, 1].flat)),
+                                   [-6.1, -5.9])
+
+    def test_a_mark_ends_where_the_next_one_starts(self):
+        road = painted(length=30.0)
+        center = road.sections[0].center
+        center.marks.append(MarkSegment(10.0, 'none', color='yellow'))
+        center.marks.append(MarkSegment(20.0, 'solid', color='yellow'))
+        ndcrd, clnds = mark_ribbons([road], 'yellow', spacing=2.0)
+        np.testing.assert_allclose(spans(ndcrd, clnds),
+                                   [[0.0, 10.0], [20.0, 30.0]])
+
+    def test_the_color_picks_the_lines(self):
+        road = painted()
+        ndcrd, clnds = mark_ribbons([road], 'yellow')
+        np.testing.assert_allclose(sorted(set(ndcrd[:, 1])), [-0.15, 0.15])
+        white = mark_ribbons([road], 'white')
+        middle = white[0][white[1]][:, :, 1].mean(axis=1)
+        assert set(np.round(middle, 9)) == {-6.0, -3.0, 3.0, 6.0}
+        assert mark_ribbons([road], 'blue')[1].shape == (0, 8)
+
+    def test_the_top_floats_above_the_surface(self):
+        road = painted(grade=0.05)
+        ndcrd, clnds = mark_ribbons([road], 'yellow', lift=0.03,
+                                    thickness=0.01)
+        sections = ndcrd.reshape(-1, 4, 3)
+        surface = 0.05 * sections[:, 0, 0]
+        np.testing.assert_allclose(sections[:, :2, 2],
+                                   np.stack([surface + 0.03] * 2, axis=1))
+        np.testing.assert_allclose(sections[:, 2:, 2],
+                                   np.stack([surface + 0.02] * 2, axis=1))
+        volumes = np.array([hex_volume(ndcrd, cell) for cell in clnds],
+                           dtype='float64')
+        assert (volumes > 0.0).all()
+
+
+class TestBoxes:
+
+    def test_scaled_turned_and_moved(self):
+        ndcrd, clnds = boxes([(0.0, 0.0, 0.0), (10.0, 20.0, 3.0)],
+                             [(1.0, 1.0, 1.0), (4.0, 2.0, 1.0)],
+                             [0.0, 0.5 * math.pi])
+        assert ndcrd.shape == (16, 3)
+        np.testing.assert_array_equal(clnds, [range(8), range(8, 16)])
+        np.testing.assert_allclose(ndcrd[:8], box()[0])
+        # The corner (-2, -1, -0.5) of the 4 x 2 x 1 box turns a quarter
+        # counterclockwise to (1, -2).
+        np.testing.assert_allclose(ndcrd[8], (11.0, 18.0, 2.5), atol=1e-12)
+        assert hex_volume(ndcrd, clnds[1]) == pytest.approx(8.0)
+
+    def test_no_boxes_give_empty_arrays(self):
+        ndcrd, clnds = boxes(np.empty((0, 3), dtype='float64'),
+                             np.empty((0, 3), dtype='float64'),
+                             np.empty(0, dtype='float64'))
+        assert ndcrd.shape == (0, 3) and clnds.shape == (0, 8)
+
+
+def arc_road(road_id='c', length=40.0, curvature=0.02, z=1.0):
+    plan = [Arc(0.0, length, 5.0, -3.0, 0.3, curvature=curvature)]
+    return Road(road_id, length=length,
+                refline=RefLine(plan, PiecewisePoly3.constant(z)))
+
+
+def assert_heading(actual, expected):
+    np.testing.assert_allclose(np.cos(actual), np.cos(expected), atol=1e-12)
+    np.testing.assert_allclose(np.sin(actual), np.sin(expected), atol=1e-12)
+
+
+class TestPoses:
+
+    def test_signals_on_a_straight_road(self):
+        road = straight('s', 0.0, 0.0, 0.4, 50.0, z=2.0)
+        road.signals = [Signal('a', road, 10.0, 3.0, z_offset=0.5),
+                        Signal('b', road, 20.0, -3.0, h_offset=0.1,
+                               orientation='-')]
+        feet, heading = signal_poses([road])
+        np.testing.assert_allclose(
+            feet[:, :2], [road.refline.point(10.0, 3.0)[:2],
+                          road.refline.point(20.0, -3.0)[:2]])
+        np.testing.assert_allclose(feet[:, 2], [2.5, 2.0])
+        assert_heading(heading, [0.4, 0.4 + math.pi + 0.1])
+
+    def test_signals_against_an_arc(self):
+        straight_road = straight('s', 0.0, 0.0, 0.0, 10.0)
+        road = arc_road()
+        road.signals = [Signal('a', road, 25.0, -2.0, h_offset=-0.2,
+                               orientation='-')]
+        feet, heading = signal_poses([straight_road, road])
+        np.testing.assert_allclose(feet, [road.refline.point(25.0, -2.0)])
+        # The arc turns left by its curvature times s from heading 0.3.
+        assert_heading(heading, [0.3 + 0.02 * 25.0 + math.pi - 0.2])
+
+    def test_no_signals_give_empty_poses(self):
+        feet, heading = signal_poses([straight('s', 0.0, 0.0, 0.0, 10.0)])
+        assert feet.shape == (0, 3) and heading.shape == (0,)
+
+    def test_objects_of_one_type(self):
+        road = arc_road()
+        road.objects = [RoadObject('p', road, 5.0, 1.0, type='pole'),
+                        RoadObject('w', road, 30.0, 0.5, z_offset=0.1,
+                                   hdg=0.25, type='crosswalk')]
+        objs, feet, heading = object_poses([road], 'crosswalk')
+        assert [obj.id for obj in objs] == ['w']
+        x, y, z = road.refline.point(30.0, 0.5)
+        np.testing.assert_allclose(feet, [(x, y, z + 0.1)])
+        assert_heading(heading, [0.3 + 0.02 * 30.0 + 0.25])
+
+
+class TestCrosswalkBoxes:
+
+    def test_a_flat_box_across_the_road(self):
+        road = laned('a', 0.0, 40.0, 0.0, [4.5], [4.5])
+        road.objects = [
+            RoadObject('cw', road, 20.0, 0.0, hdg=0.0, type='crosswalk',
+                       length=4.0, width=9.0),
+            RoadObject('bare', road, 30.0, 0.0, type='crosswalk'),
+            RoadObject('pole', road, 30.0, 0.0, type='pole', length=1.0,
+                       width=1.0)]
+        ndcrd, clnds = crosswalk_boxes([road], lift=0.03, thickness=0.02)
+        assert clnds.shape == (1, 8)
+        lo, hi = ndcrd.min(axis=0), ndcrd.max(axis=0)
+        # Its length runs along the road and its width across it.
+        np.testing.assert_allclose(lo, (18.0, -4.5, 0.01), atol=1e-12)
+        np.testing.assert_allclose(hi, (22.0, 4.5, 0.03), atol=1e-12)
+        assert hex_volume(ndcrd, clnds[0]) == pytest.approx(4 * 9 * 0.02)
+
+    def test_the_heading_turns_the_box(self):
+        road = straight('s', 0.0, 0.0, 0.5 * math.pi, 40.0)
+        road.objects = [RoadObject('cw', road, 20.0, 1.0, type='crosswalk',
+                                   length=4.0, width=9.0)]
+        ndcrd, _ = crosswalk_boxes([road])
+        lo, hi = ndcrd.min(axis=0), ndcrd.max(axis=0)
+        # The road runs north, so the box is 9 m east to west at its left
+        # offset of 1 m, which is to the west.
+        np.testing.assert_allclose(lo[:2], (-5.5, 18.0), atol=1e-12)
+        np.testing.assert_allclose(hi[:2], (3.5, 22.0), atol=1e-12)
 
 
 class TestConcat:
