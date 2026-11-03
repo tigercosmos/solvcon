@@ -104,9 +104,9 @@ def make_road(way: dict, label: str, xy: np.ndarray, tan: np.ndarray,
         road.refline.plan.append(geom)
         s += geom.length
     road.length = s
-    objects = structure(way, s)
-    if objects:
-        road.attrs['_unknown'] = objects
+    bridge = structure(way, s)
+    if bridge is not None:
+        road.structures.append(bridge)
     road.attrs['userData'] = user_data(way, stops)
 
     maxspeed = way['tags'].get('maxspeed', '')

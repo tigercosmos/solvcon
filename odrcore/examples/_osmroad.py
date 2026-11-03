@@ -4,7 +4,7 @@
 """
 The parts the OpenStreetMap example generators share: the Overpass fetch,
 the vertex thinning, the Hermite fit of a polyline into normalized
-``paramPoly3`` segments and the bridge or tunnel ``<objects>`` of a way.
+``paramPoly3`` segments and the bridge or tunnel of a way.
 """
 
 import json
@@ -12,11 +12,11 @@ import math
 import os
 import urllib.parse
 import urllib.request
-from xml.sax.saxutils import quoteattr
 
 import numpy as np
 
 from odrcore.geom import ParamPoly3
+from odrcore.model import Structure
 
 OVERPASS_URL = os.environ.get('OVERPASS_URL',
                               'https://overpass-api.de/api/interpreter')
@@ -91,9 +91,10 @@ def tagged(tags: dict, key: str) -> bool:
     return tags.get(key, '').strip().lower() not in ('', 'no', 'false', '0')
 
 
-def structure(way: dict, length: float, road_id: str = '') -> str:
-    """The bridge or tunnel ``<objects>`` of a way, or of the road
-    ``road_id`` cut from it."""
+def structure(way: dict, length: float,
+              road_id: str = '') -> Structure | None:
+    """The bridge or tunnel of a way, or of the road ``road_id`` cut from
+    it, or None when the way is on neither."""
     tags = way['tags']
     if tagged(tags, 'tunnel'):
         kind = 'tunnel'
@@ -102,10 +103,8 @@ def structure(way: dict, length: float, road_id: str = '') -> str:
     elif tagged(tags, 'bridge'):
         kind, typ = 'bridge', 'concrete'
     else:
-        return ''
-    name = tags.get(f'{kind}:name', '')
-    return (f'<objects><{kind} s="0.0" length="{length!r}" '
-            f'id="{road_id or way["id"]}.{kind}" name={quoteattr(name)} '
-            f'type="{typ}"/></objects>')
+        return None
+    return Structure(kind, f'{road_id or way["id"]}.{kind}', 0.0, length,
+                     type=typ, name=tags.get(f'{kind}:name', ''))
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:

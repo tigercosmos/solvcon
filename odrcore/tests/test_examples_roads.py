@@ -3,7 +3,6 @@
 
 import math
 import pathlib
-import re
 import subprocess
 import sys
 import urllib.error
@@ -14,7 +13,6 @@ import pytest
 import odrcore
 from odrcore.model import RoadLink
 
-ATTR = r'(\w+)="([^"]*)"'
 EXAMPLES = pathlib.Path(odrcore.__file__).parent / 'examples'
 sys.path.insert(0, str(EXAMPLES))
 import _gsi  # noqa: E402
@@ -199,7 +197,10 @@ def test_user_data(built):
     assert data['osm:highway'] == 'primary'
     assert data['osm:layer'] == '1'
     assert 'osm:signal' not in data
-    assert '<bridge ' in m.roads['12'].attrs['_unknown']
+    (bridge,) = m.roads['12'].structures
+    assert (bridge.kind, bridge.id, bridge.s, bridge.type) == \
+        ('bridge', '12.bridge', 0.0, 'concrete')
+    assert bridge.length == pytest.approx(m.roads['12'].length)
     assert user_data(m.roads['13'])['osm:name'] == 'Ginza Avenue'
     assert user_data(m.roads['11'])['osm:name'] == 'Sakura-dori'
 
@@ -421,12 +422,13 @@ def test_structure_tags_said_no():
     assert not any(_osmroad.tagged(no, key) for key in no)
     assert _osmroad.tagged({'bridge': 'viaduct'}, 'bridge')
     assert _osmroad.tagged({'tunnel': 'Yes'}, 'tunnel')
-    assert _osmroad.structure({'id': 1, 'tags': no}, 10.0) == ''
+    assert _osmroad.structure({'id': 1, 'tags': no}, 10.0) is None
     assert _gsi.structure_offset(no) == 0.0
     assert _gsi.structure_offset({'cutting': 'no', 'embankment': 'yes'}) \
         == _gsi.EMBANKMENT
     bridge = {'bridge': 'viaduct', 'tunnel': 'no', 'layer': '2'}
-    assert '<bridge ' in _osmroad.structure({'id': 1, 'tags': bridge}, 10.0)
+    assert _osmroad.structure({'id': 1, 'tags': bridge}, 10.0).kind \
+        == 'bridge'
     assert _gsi.structure_offset(bridge) == 2.0 * _gsi.VIADUCT
 
 
@@ -491,15 +493,22 @@ def test_signal_at_junction(crossing):
 
 def test_crosswalk(crossing):
     road = crossing.roads['33']
-    walk = re.search(r'<object [^>]*type="crosswalk"[^>]*/>',
-                     road.attrs['_unknown']).group(0)
-    attrs = dict(re.findall(ATTR, walk))
-    assert attrs['id'] == 'cw45'
-    assert float(attrs['width']) == pytest.approx(9.0)
-    assert float(attrs['t']) == pytest.approx(0.0)
-    s = float(attrs['s'])
-    assert 0.0 < s < road.length
+    (walk,) = road.objects
+    assert (walk.id, walk.type, walk.orientation) == \
+        ('cw45', 'crosswalk', 'none')
+    assert walk.road is road
+    assert walk.width == pytest.approx(9.0)
+    assert walk.length == yamanote_roads.CROSSWALK_LENGTH
+    assert walk.t == pytest.approx(0.0)
+    assert 0.0 < walk.s < road.length
     assert 'osm:crossing' not in user_data(road)
+    assert '_unknown' not in road.attrs
+
+
+def objects(road):
+    return ([(obj.id, obj.type, round(obj.s, 9), round(obj.width, 9))
+             for obj in road.objects],
+            [(st.kind, st.id, st.type) for st in road.structures])
 
 
 def test_signals_roundtrip(crossing, tmp_path):
@@ -508,8 +517,7 @@ def test_signals_roundtrip(crossing, tmp_path):
     back = odrcore.load(path)
     for rid, road in crossing.roads.items():
         assert signals(back.roads[rid]) == signals(road)
-        assert re.findall(ATTR, back.roads[rid].attrs.get('_unknown', '')) \
-            == re.findall(ATTR, road.attrs.get('_unknown', ''))
+        assert objects(back.roads[rid]) == objects(road)
     reg = back.regulations['sig:sig51r']
     assert reg.kind == 'traffic_light'
     assert [ln.id for ln in reg.roles['refers']] == [('35', 0, 1)]
