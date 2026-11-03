@@ -46,7 +46,10 @@ class TestStraight:
     def test_skipped_and_unknown(self, m):
         assert m.attrs['_skipped'] == 'controller'
         road = m.roads['1']
-        assert '<object' in road.attrs['_unknown']
+        assert '_unknown' not in road.attrs
+        (pole,) = road.objects
+        assert (pole.id, pole.type, pole.s, pole.t) == ('9', 'pole', 10.0,
+                                                        5.0)
         assert '<shape' in road.attrs['_unknown_lateralProfile']
         assert '<height' in m.lanes[('1', 0, 2)].attrs['_unknown']
         assert 'vendorTag' in m.lanes[('1', 0, -1)].attrs['userData']
@@ -213,6 +216,90 @@ class TestJunction:
         refers = {ln.id for ln in reg.roles['refers']}
         assert refers == {('1', 0, -1), ('3', 0, -1)}
         assert m.roads['3'].signal_refs[0].signal_id == 'tl1'
+
+
+OBJECTS = """<OpenDRIVE>
+  <header revMajor="1" revMinor="8" name="objects"/>
+  <road name="" length="50.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="50.0"><line/>
+      </geometry>
+    </planView>
+    <lanes><laneSection s="0.0"><center><lane id="0" type="none"/></center>
+    </laneSection></lanes>
+    <signals><signal s="5.0" t="2.0" id="s1" dynamic="yes"/></signals>
+    <objects>
+      <bridge s="30.0" length="20.0" id="b1" name="Kanda" type="steel"/>
+      <object id="cw1" type="crosswalk" s="12.5" t="-0.5" zOffset="0.01"
+              hdg="0.25" orientation="none" length="4.0" width="7.5"
+              height="0.0" validLength="0.0">
+        <outline id="0"><cornerLocal u="0" v="0" z="0"/></outline>
+        <userData code="paint" value="zebra"/>
+      </object>
+      <objectReference s="1.0" t="0.0" id="ref1" orientation="none"/>
+      <tunnel s="0.0" length="10.0" id="t1" name="" type="standard"
+              lighting="0.5"/>
+      <object id="p1" s="40.0" t="3.0" radius="0.2" height="5.0"/>
+      <userData code="objects" value="kept"/>
+    </objects>
+    <userData code="road" value="mine"/>
+  </road>
+</OpenDRIVE>
+"""
+
+
+class TestObjects:
+
+    @pytest.fixture
+    def m(self):
+        return parse.loads(OBJECTS)
+
+    def test_objects_and_structures(self, m):
+        road = m.roads['1']
+        walk, pole = road.objects
+        assert walk.road is road
+        assert (walk.id, walk.type, walk.s, walk.t, walk.z_offset,
+                walk.hdg, walk.length, walk.width, walk.height) == \
+            ('cw1', 'crosswalk', 12.5, -0.5, 0.01, 0.25, 4.0, 7.5, 0.0)
+        assert walk.attrs['validLength'] == '0.0'
+        assert '<outline' in walk.attrs['_unknown']
+        assert parse.user_data(walk.attrs['userData']) == [('paint',
+                                                            'zebra')]
+        assert (pole.type, pole.orientation, pole.radius, pole.length) == \
+            ('', 'none', 0.2, None)
+        assert [(st.kind, st.id, st.s, st.length, st.type, st.name)
+                for st in road.structures] == \
+            [('tunnel', 't1', 0.0, 10.0, 'standard', ''),
+             ('bridge', 'b1', 30.0, 20.0, 'steel', 'Kanda')]
+        assert road.structures[0].attrs == {'lighting': '0.5'}
+
+    def test_unknown_children_stay_in_objects(self, m):
+        road = m.roads['1']
+        kept = road.attrs['_unknown_objects']
+        assert '<objectReference' in kept and 'value="kept"' in kept
+        assert parse.user_data(road.attrs['userData']) == [('road', 'mine')]
+        assert '_unknown' not in road.attrs
+
+    def test_dump_writes_objects_before_signals_in_schema_order(self, m):
+        text = serialize.dumps(m)
+        road = text[text.index('<road '):]
+        tags = [tag for tag in ('<lanes>', '<objects>', '<signals>',
+                                '<userData code="road"')]
+        assert sorted(tags, key=road.index) == tags
+        objects = road[road.index('<objects>'):road.index('</objects>')]
+        order = ['id="cw1"', 'id="p1"', '<objectReference', '<tunnel',
+                 '<bridge']
+        assert sorted(order, key=objects.index) == order
+        assert 'value="kept"' in objects and 'value="mine"' not in objects
+
+    def test_load_dump_load(self, m):
+        again = parse.loads(serialize.dumps(m))
+        assert equivalent(m, again) == []
+        assert canonical(again)['roads']['1']['objects'][0]['width'] == 7.5
+        moved = parse.loads(serialize.dumps(m))
+        moved.roads['1'].objects[0].hdg = 0.5
+        assert equivalent(m, moved) == \
+            ['/roads/1/objects[0]/hdg: 0.25 != 0.5']
 
 
 class TestUserData:

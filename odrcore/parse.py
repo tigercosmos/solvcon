@@ -20,16 +20,20 @@ from .geom import (Arc, Line, ParamPoly3, PiecewisePoly3, PlanGeom, Poly3,
                    RefLine, Spiral)
 from .model import (AccessRule, Boundary, Connection, Frame, Header,
                     Junction, Lane, LaneLink, LaneSection, Map, MarkSegment,
-                    Regulation, RegulationKind, Road, RoadLink, RoadType,
-                    Signal, SignalReference, SpeedLimit, boundary_id)
+                    Regulation, RegulationKind, Road, RoadLink,
+                    RoadObject, RoadType, Signal, SignalReference,
+                    SpeedLimit, Structure, boundary_id)
 
 SPEED_UNITS = {'m/s', 'mph', 'km/h'}
 TOP_LEVEL = {'header', 'road', 'junction'}
 ROAD_CHILDREN = {'link', 'type', 'planView', 'elevationProfile',
-                 'lateralProfile', 'lanes', 'signals'}
+                 'lateralProfile', 'lanes', 'objects', 'signals'}
 LANE_CHILDREN = {'link', 'width', 'border', 'roadMark', 'speed', 'access'}
 SIGNAL_ATTRS = {'id', 's', 't', 'zOffset', 'hOffset', 'type', 'subtype',
                 'country', 'dynamic', 'orientation'}
+OBJECT_ATTRS = {'id', 's', 't', 'zOffset', 'hdg', 'orientation', 'type',
+                'subtype', 'name', 'length', 'width', 'height', 'radius'}
+STRUCTURE_ATTRS = {'id', 's', 'length', 'type', 'name'}
 
 
 class ParseError(ValueError):
@@ -197,6 +201,10 @@ def _road(elem: Element) -> Road:
     if lanes is not None:
         _lanes(lanes, road)
 
+    objects = child(elem, 'objects')
+    if objects is not None:
+        _objects(objects, road)
+
     signals = child(elem, 'signals')
     if signals is not None:
         for s in children(signals):
@@ -310,6 +318,37 @@ def _marks(elem: Element) -> list[MarkSegment]:
         out.append(mark)
     out.sort(key=lambda mk: mk.s_offset)
     return out
+
+
+def _objects(elem: Element, road: Road) -> None:
+    for e in children(elem):
+        if e.tag == 'object':
+            obj = RoadObject(id=e.get('id'), road=road, s=float(e.get('s')),
+                             t=float(e.get('t')),
+                             z_offset=get_float(e, 'zOffset', 0.0),
+                             hdg=get_float(e, 'hdg', 0.0),
+                             orientation=e.get('orientation', 'none'),
+                             type=e.get('type', ''),
+                             subtype=e.get('subtype'),
+                             name=e.get('name', ''),
+                             length=get_float(e, 'length'),
+                             width=get_float(e, 'width'),
+                             height=get_float(e, 'height'),
+                             radius=get_float(e, 'radius'),
+                             attrs=_xml.extra_attrs(e, OBJECT_ATTRS))
+            _xml.stash_unknown(e, set(), obj.attrs)
+            road.objects.append(obj)
+        elif e.tag in ('bridge', 'tunnel'):
+            st = Structure(kind=e.tag, id=e.get('id'), s=float(e.get('s')),
+                           length=float(e.get('length')),
+                           type=e.get('type', ''), name=e.get('name', ''),
+                           attrs=_xml.extra_attrs(e, STRUCTURE_ATTRS))
+            _xml.stash_unknown(e, set(), st.attrs)
+            road.structures.append(st)
+    # The schema order, in which the serializer writes them back.
+    road.structures.sort(key=lambda st: st.kind != 'tunnel')
+    _xml.stash_unknown(elem, {'object', 'bridge', 'tunnel'}, road.attrs,
+                       key='_unknown_objects')
 
 
 def _validity(elem: Element) -> list[tuple[int, int]]:

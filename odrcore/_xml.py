@@ -66,10 +66,12 @@ def from_string(text: str) -> Element:
 def stash_unknown(elem: Element, known: set[str], attrs: dict[str, str],
                   key: str = UNKNOWN_KEY) -> None:
     """Keep the XML of children outside ``known`` under ``attrs[key]``.
-    ``<userData>`` is stashed under its own key."""
+    ``<userData>`` is stashed under its own key, unless ``key`` is a custom
+    one: such a key shares ``attrs`` with the parent element, so the
+    ``<userData>`` stays in it verbatim."""
     unknown, user = [], []
     for c in children(elem):
-        if c.tag == 'userData':
+        if c.tag == 'userData' and key == UNKNOWN_KEY:
             user.append(to_string(c))
         elif c.tag not in known:
             unknown.append(to_string(c))
@@ -81,7 +83,7 @@ def stash_unknown(elem: Element, known: set[str], attrs: dict[str, str],
 
 def restore_unknown(elem: Element, attrs: dict[str, str],
                     key: str = UNKNOWN_KEY) -> None:
-    for k in (key, 'userData'):
+    for k in (key, 'userData') if key == UNKNOWN_KEY else (key,):
         text = attrs.get(k)
         if not text:
             continue

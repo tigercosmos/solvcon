@@ -19,7 +19,8 @@ from ._xml import ET, Element, set_attrs
 from .geom import (Arc, Line, ParamPoly3, PiecewisePoly3, PlanGeom, Poly3,
                    Spiral)
 from .model import (Boundary, Junction, Lane, LaneSection, Map, MarkSegment,
-                    Road, RoadLink, Signal, SignalReference, SpeedLimit)
+                    Road, RoadLink, RoadObject, Signal, SignalReference,
+                    SpeedLimit, Structure)
 
 LaneGeometry = Literal['width', 'border']
 
@@ -150,6 +151,9 @@ def _road(root: Element, road: Road, lane_geometry: LaneGeometry) -> None:
 
     _lanes(elem, road, lane_geometry)
 
+    if road.objects or road.structures or road.attrs.get('_unknown_objects'):
+        _objects(elem, road)
+
     if road.signals or road.signal_refs:
         signals = ET.SubElement(elem, 'signals')
         for sig in road.signals:
@@ -239,6 +243,34 @@ def _mark(parent: Element, mk: MarkSegment) -> None:
                 width=mk.width, laneChange=mk.lane_change, height=mk.height)
     set_attrs(elem, _plain_attrs(mk.attrs))
     _xml.restore_unknown(elem, mk.attrs)
+
+
+def _objects(parent: Element, road: Road) -> None:
+    """Write ``<objects>`` in schema order: ``<object>``, the kept
+    children such as ``<objectReference>``, ``<tunnel>``, ``<bridge>``."""
+    elem = ET.SubElement(parent, 'objects')
+    for obj in road.objects:
+        _object(elem, obj)
+    _xml.restore_unknown(elem, road.attrs, key='_unknown_objects')
+    for st in sorted(road.structures, key=lambda st: st.kind != 'tunnel'):
+        _structure(elem, st)
+
+
+def _object(parent: Element, obj: RoadObject) -> None:
+    elem = _sub(parent, 'object', id=obj.id, type=obj.type or None,
+                subtype=obj.subtype, name=obj.name or None, s=obj.s, t=obj.t,
+                zOffset=obj.z_offset, orientation=obj.orientation,
+                hdg=obj.hdg, length=obj.length, width=obj.width,
+                height=obj.height, radius=obj.radius)
+    set_attrs(elem, _plain_attrs(obj.attrs))
+    _xml.restore_unknown(elem, obj.attrs)
+
+
+def _structure(parent: Element, st: Structure) -> None:
+    elem = _sub(parent, st.kind, s=st.s, length=st.length, id=st.id,
+                name=st.name, type=st.type or None)
+    set_attrs(elem, _plain_attrs(st.attrs))
+    _xml.restore_unknown(elem, st.attrs)
 
 
 def _validity(parent: Element, validity: list[tuple[int, int]]) -> None:

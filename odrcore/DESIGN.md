@@ -17,7 +17,7 @@ the lossless round trip.
 | Module | Content |
 | --- | --- |
 | `geom.py` | `PiecewisePoly3`, plan-view primitives, `RefLine`. Analytic only. |
-| `model.py` | Entities and the `Map` container. |
+| `model.py` | Entities (lanes and boundaries, signals, road objects and structures) and the `Map` container. |
 | `parse.py` | `load(path)`, `loads(text)`: `.xodr` to `Map`, with the reshaping. `user_data(text)`: the `(code, value)` pairs of the kept `<userData>`. |
 | `serialize.py` | `dump(map, path, lane_geometry="width"|"border")`, `dumps`. |
 | `topology.py` | Derived `Link` index, travel-direction accessors, `validate`, `loop_chain` of road successors. |
@@ -69,6 +69,9 @@ the lossless round trip.
 | `<lane>` `type`, `level`, `direction` | `Lane.type`, `Lane.level`, `Lane.direction` | lanelet attributes, `one_way` |
 | `<junction>` | `Junction` | none (grouping) |
 | `<junction><connection>` with `<laneLink>` | `Connection` | routing graph edges inside a junction |
+| `<objects><object>` | `RoadObject` in `Road.objects` | none |
+| `<objects><bridge>`, `<tunnel>` | `Structure` in `Road.structures` (`kind` is the tag) | none |
+| other `<objects>` children (`<objectReference>`, ...) | verbatim in `Road.attrs["_unknown_objects"]` | none |
 | `<signal>` | `Signal` | traffic sign or light primitive |
 | `<signalReference>` | `SignalReference` | extra `refers` lanes |
 | `<signal>` plus `<validity>` | `Regulation` (`kind` from type and `dynamic`) | RegulatoryElement |
@@ -120,9 +123,20 @@ named after the lane whose outer border it is, `"road:section:lane"`, and
   junction). `Connection.target_road` hides the difference.
 - The signal `dynamic` attribute is `yes`/`no`, not a boolean literal. It is
   parsed leniently and written as `yes`/`no`.
-- The verbatim sidecar is appended at the end of its parent element. The
-  schema orders `<objects>` before `<signals>`, so a dumped road that kept
-  an `<objects>` block is semantically complete but not schema-ordered.
+- The verbatim sidecar is appended at the end of its parent element. A
+  road writes `<objects>` before `<signals>` as the schema orders them, and
+  inside it the `<object>` entries, the kept children, the tunnels and the
+  bridges. The parser sorts `Road.structures` tunnels first so that a load,
+  dump and load keeps their order.
+- A sidecar under a custom key such as `_unknown_objects` or
+  `_unknown_lateralProfile` shares `attrs` with its parent, so the
+  `<userData>` of that child element stays inside it verbatim instead of
+  going to `attrs["userData"]`.
+- `RoadObject.hdg` is relative to the reference line direction at `s`, and
+  `length` and `width` are the extents along and across that heading, the
+  local u and v of the spec. Attributes without a field (`validLength`,
+  `pitch`, `roll`, `perpToRoad`, ...) and children (`<outline>`,
+  `<repeat>`, `<material>`, `<validity>`, ...) stay in `attrs`.
 
 ## Topology
 
@@ -147,7 +161,7 @@ at a road link, and junction connections that name missing roads or lanes.
 ## Out of scope this milestone
 
 Ignored on parse and never breaking it: `lateralProfile/shape`, `surface`,
-`railroad`, `controller`, `junctionGroup`, `station`, `objects`, lane
+`railroad`, `controller`, `junctionGroup`, `station`, lane
 `height`, `material`, `rule`, `<include>`. Road-level ones are kept verbatim
 in the sidecar; top-level ones are only recorded by tag name.
 
