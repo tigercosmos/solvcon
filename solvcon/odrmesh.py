@@ -209,7 +209,8 @@ def _painted(roads: Sequence[Road], color: str,
         if end <= start:
             continue
         if mk.type == 'broken':
-            # No dash shorter than a micrometer at the end.
+            # Stop a micrometer short of the end, so that rounding
+            # cannot start a last dash of no length there.
             lo = np.arange(start, end - 1e-6, dash[0] + dash[1],
                            dtype='float64')
             hi = np.minimum(lo + dash[0], end)
@@ -336,14 +337,14 @@ def signal_poses(roads: Sequence[Road]) -> tuple[np.ndarray, np.ndarray]:
     return feet, heading + turn + np.where(back, np.pi, 0.0)
 
 
-def object_poses(roads: Sequence[Road], type: str
+def object_poses(roads: Sequence[Road], object_type: str
                  ) -> tuple[list[RoadObject], np.ndarray, np.ndarray]:
-    """Return the objects of ``roads`` of ``type``, road by road, their foot
-    ``(n, 3)``, the road surface at ``(s, t)`` raised by ``z_offset``, and
-    their heading ``(n,)``, that of the reference line there plus
-    ``hdg``."""
+    """Return the objects of ``roads`` of ``object_type``, road by road,
+    their foot ``(n, 3)``, the road surface at ``(s, t)`` raised by
+    ``z_offset``, and their heading ``(n,)``, that of the reference line
+    there plus ``hdg``."""
     found = [(k, obj) for k, road in enumerate(roads)
-             for obj in road.objects if obj.type == type]
+             for obj in road.objects if obj.type == object_type]
     objs = [obj for _, obj in found]
     owner = np.array([k for k, _ in found], dtype='int64')
     s, t, z, hdg = (np.array([getattr(obj, name) for obj in objs],
