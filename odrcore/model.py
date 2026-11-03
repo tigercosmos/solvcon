@@ -235,6 +235,8 @@ class Road:
     successor: Optional[RoadLink] = None
     road_type: list[RoadType] = field(default_factory=list)
     rule: TrafficHand = 'RHT'
+    objects: list[RoadObject] = field(default_factory=list)
+    structures: list[Structure] = field(default_factory=list)
     signals: list[Signal] = field(default_factory=list)
     signal_refs: list[SignalReference] = field(default_factory=list)
     attrs: Attrs = field(default_factory=dict)
@@ -285,6 +287,49 @@ class Junction:
 
     def __repr__(self) -> str:
         return f'Junction({self.id!r})'
+
+
+@dataclass(eq=False)
+class RoadObject:
+    """``<objects><object>``. ``hdg`` is relative to the reference line
+    direction at ``s``; ``length`` runs along that heading and ``width``
+    across it. Children such as ``<outline>`` stay verbatim in ``attrs``."""
+
+    id: str
+    road: Road
+    s: float
+    t: float
+    z_offset: float = 0.0
+    hdg: float = 0.0
+    orientation: str = 'none'
+    type: str = ''
+    subtype: Optional[str] = None
+    name: str = ''
+    length: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
+    radius: Optional[float] = None
+    attrs: Attrs = field(default_factory=dict)
+
+    def __repr__(self) -> str:
+        return f'RoadObject({self.id!r}, {self.type!r})'
+
+
+StructureKind = Literal['bridge', 'tunnel']
+
+
+@dataclass
+class Structure:
+    """``<objects><bridge>`` or ``<objects><tunnel>``: the stretch of
+    the road from ``s`` that runs on a bridge or through a tunnel."""
+
+    kind: StructureKind
+    id: str
+    s: float
+    length: float
+    type: str = ''
+    name: str = ''
+    attrs: Attrs = field(default_factory=dict)
 
 
 Validity = tuple[int, int]
