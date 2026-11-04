@@ -19,6 +19,7 @@
 #include <solvcon/pilot/visual/RColormap.hpp>
 #include <solvcon/pilot/visual/RScalarBar.hpp>
 #include <solvcon/pilot/visual/RScene.hpp>
+#include <solvcon/pilot/canvas/RLabelOverlay.hpp>
 #include <solvcon/pilot/canvas/RTextOverlay.hpp>
 #include <solvcon/pilot/visual/RDrawable.hpp>
 
@@ -31,6 +32,7 @@
 #include <QRhiWidget>
 #include <QVector3D>
 
+#include <array>
 #include <map>
 #include <memory>
 #include <string>
@@ -41,6 +43,46 @@ namespace solvcon
 {
 
 class RScalarField;
+
+/**
+ * Per-cell geometric quality metrics, over the SimpleArray mesh path.
+ * The angle-based metrics read the cell node polygon, so they are
+ * meaningful for 2D cells; "volume" and "aspect_ratio" work in any dimension.
+ */
+class CellQualityHelper
+{
+public:
+
+    enum class Metric : uint8_t
+    {
+        Volume,
+        AspectRatio,
+        Skewness,
+        MinAngle,
+        MaxAngle,
+    }; /* end enum class Metric */
+
+    CellQualityHelper(StaticMesh const & mesh, Metric metric);
+
+    static Metric parse_metric(std::string const & name);
+    static char const * name(Metric metric);
+
+    real_type volume(int_type icl) const { return m_mesh.clvol(icl); }
+    real_type aspect_ratio(int_type icl) const;
+    real_type skewness(int_type icl) const;
+    real_type min_angle(int_type icl) const { return angle_range(icl).first; }
+    real_type max_angle(int_type icl) const { return angle_range(icl).second; }
+
+    SimpleArray<real_type> calculate() const;
+
+private:
+
+    small_vector<std::array<real_type, 3>> cell_points(int_type icl) const;
+    std::pair<real_type, real_type> angle_range(int_type icl) const;
+
+    Metric m_metric;
+    StaticMesh const & m_mesh;
+}; /* end class CellQualityHelper */
 
 /**
  * @brief Interactive 2D/3D viewer for spatial domains and fields on
@@ -81,10 +123,31 @@ public:
         float tz,
         float sx,
         float sy,
-        float sz);
+        float sz,
+        float yaw = 0.0f);
     void setObjectVisible(std::string const & name, bool visible);
     void setObjectOpacity(std::string const & name, float opacity);
+    void setObjectColor(std::string const & name, float r, float g, float b, float a);
     std::vector<std::string> objectNames() const;
+
+    /**
+     * Anchor the text label @p name at the world point (@p x, @p y, @p z),
+     * drawn at a fixed pixel size and shifted by (@p dx, @p dy) logical pixels
+     * (x right, y down). Re-adding a name replaces the label.
+     */
+    void addLabel(
+        std::string const & name,
+        std::string const & text,
+        float x,
+        float y,
+        float z,
+        float dx = 8.0f,
+        float dy = 0.0f);
+    void removeLabel(std::string const & name);
+    void clearLabels();
+    void showLabels(bool show);
+    bool labelsShown() const { return m_labels.isVisible(); }
+    std::vector<std::string> labelNames() const { return m_labels.names(); }
 
     /// Show or hide the mesh, in whatever representation is active.
     void showMesh(bool show);
@@ -208,13 +271,14 @@ public:
     void colorByBoundary();
     void clearCellColoring();
 
-    /// Color the mesh by a per-cell geometric quality metric through the
-    /// continuous colormap and scalar bar. @p metric is one of "volume",
-    /// "aspect_ratio", "skewness", "min_angle", "max_angle".
-    void colorByQuality(std::string const & metric);
+    /**
+     * Color the mesh by a per-cell geometric quality metric through the
+     * continuous colormap and scalar bar.
+     */
+    void colorByQuality(CellQualityHelper::Metric metric);
 
-    /// The (min, max) range of the named quality metric over the cells.
-    std::pair<float, float> qualityRange(std::string const & metric) const;
+    /// The (min, max) range of the quality metric over the cells.
+    std::pair<real_type, real_type> qualityRange(CellQualityHelper::Metric metric) const;
 
     /// Frame the camera so the whole domain is in view.
     void fitCameraToScene();
@@ -403,12 +467,14 @@ private:
     {
         RDrawable * drawable = nullptr;
         std::shared_ptr<StaticMesh> mesh;
+        bool placed = false; ///< Whether a transform has framed it once.
     }; /* end struct ObjectEntry */
     std::map<std::string, ObjectEntry> m_objects;
     std::vector<float> m_ticks_x; ///< Cube-axes tick coordinates per axis.
     std::vector<float> m_ticks_y;
     std::vector<float> m_ticks_z;
     RTextOverlay m_title; ///< The figure-title overlay.
+    RLabelOverlay m_labels; ///< The world-anchored text labels.
     bool m_has_selection = false;
     std::string m_selection_kind = "none";
     int m_selection_id = -1;

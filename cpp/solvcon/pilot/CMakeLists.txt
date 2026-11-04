@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 4.0.1)
 set(SOLVCON_PILOT_PYMODHEADERS
     # common/
     ${CMAKE_CURRENT_SOURCE_DIR}/common/config_home.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/cursor.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/platform.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/pyside.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/render_misc.hpp
@@ -63,6 +64,7 @@ set(SOLVCON_PILOT_PYMODHEADERS
 set(SOLVCON_PILOT_PYMODSOURCES
     # common/
     ${CMAKE_CURRENT_SOURCE_DIR}/common/config_home.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/cursor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/render_misc.cpp
     # theme/
     ${CMAKE_CURRENT_SOURCE_DIR}/theme/theme.cpp
@@ -95,6 +97,7 @@ set(SOLVCON_PILOT_PYMODSOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/visual/RMaterial.cpp
     # canvas/
     ${CMAKE_CURRENT_SOURCE_DIR}/canvas/RTextOverlay.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/canvas/RLabelOverlay.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/canvas/R2DWidget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/canvas/DrawTool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/canvas/RWorldRenderer2d.cpp

@@ -2,37 +2,34 @@
 # BSD 3-Clause License, see COPYING
 
 
+import numpy as np
+
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtWidgets import QDockWidget
+
 from ...pilot import base
 
+from . import _panel
+from . import _riemann
 from . import _shocktube
+from . import _window
+
+MARCH_LABEL = "CESE"
 
 
-class Euler1DApp(base.OneDimBaseApp):
+class ShockTubeApp(base.PilotFeature):
     """
-    Main application for Euler 1D solver.
+    The shock-tube app on App > Shock tube: the numerical solution of Sod's
+    problem marched over the analytic one, with the config panel docked
+    beside it.
     """
 
-    TITLE = "Euler solver"
+    #: Points the analytic solution is drawn through.
+    EXACT_POINTS = 801
 
-    def populate_menu(self):
-        """
-        Set menu item for GUI.
-        """
-        self.add_action(
-            "One",
-            text="Shock tube",
-            tip="One-dimensional shock-tube problem with Euler solver",
-            func=self.run,
-            id="one.euler",
-            weight=10,
-        )
-
-    def init_solver_config(self):
-        """
-        Set shock tube solver configuration by user' input, and then reset the
-        initial condition.
-        """
-        solver_config_data = [
+    def __init__(self, *args, **kw):
+        super().__init__(*args, **kw)
+        self.solver_config = base.SolverConfig([
             ["gamma", 1.4, "The ratio of the specific heats."],
             ["p_left", 1.0, "The pressure of left hand side."],
             ["rho_left", 1.0, "The density of left hand side."],
@@ -41,114 +38,236 @@ class Euler1DApp(base.OneDimBaseApp):
             ["xmin", -10, "The most left point of x axis."],
             ["xmax", 10, "The most right point of x axis."],
             ["ncoord", 201, "Number of grid point."],
-            ["time_increment", 0.05, "The density of right hand side."],
+            ["time_increment", 0.05, "The time increment of a step."],
             ["time_interval", 10, "Qt timer interval"],
             ["max_steps", 50, "Maximum step"],
-            ["profiling", False, "Turn on / off solver profiling"],
-        ]
-        self.solver_config = base.SolverConfig(solver_config_data)
+        ])
+        self.st = None
+        self.exact = None
+        # The time and the numerical density of each step, for the x-t
+        # diagram.
+        self.xt_times = []
+        self.xt_rows = []
+        self.current_step = 0
+        self.state = 'ready'
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.step)
+        self.window = None
+        self.subwindow = None
+        self.dock = None
+        self.dock_action = None
+        self._close_filter = None
 
-    def set_plot_data(self):
+    @property
+    def config(self):
+        """The values of the config table by variable name."""
+        cfg = self.solver_config
+        return {cfg.data(row, 0): cfg.data(row, 1)
+                for row in range(cfg.rowCount())}
+
+    def populate_menu(self):
         """
-        Set the analytical and numerical data for plot.
-            - density
-            - pressure
-            - velocity
-            - temperature
-            - internal_energy
-            - entropy
+        Set menu item for GUI.
         """
-        self.plot_ana = True
-        self.plot_num = True
-        self.plot_data = []
+        self.add_action(
+            "App",
+            text="Shock tube",
+            tip="One-dimensional shock-tube problem with Euler solver",
+            func=self.open,
+            id="app.shocktube",
+            weight=10,
+        )
+        # The panel lives as long as the window it configures, so its
+        # toggle waits for the window to open.
+        self.dock_action = self.add_action(
+            "View/Panels", "App config",
+            "Toggle the config panel of the shock-tube app", None,
+            id="panel.shocktube_config", weight=16, checkable=True)
+        self.dock_action.setEnabled(False)
+        self.dock_action.toggled.connect(self._on_dock_toggled)
 
-        density = base.QuantityLine(
-            name="density",
-            unit=r"$\mathrm{kg}/\mathrm{m}^3$",
-            color='r',
-            y_upper_lim=1.2,
-            y_bottom_lim=-0.1)
-        setattr(self, density.name, density)
-        self.plot_data.append([self.density.name, True])
+    def open(self):
+        """Open the window maximized, or bring it back."""
+        if self.subwindow is not None:
+            self._mgr.mdiArea.setActiveSubWindow(self.subwindow)
+            self.subwindow.showMaximized()
+            return
+        self.window = _window.ShockTubeWindow()
+        self.window.run_clicked = self.run_or_pause
+        self.window.step_clicked = self.step
+        self.window.reset_clicked = self.init_solver
+        self.window.exact_clicked = self.draw
+        self.init_solver()
+        self.subwindow = self._mgr.addSubWindow(self.window)
+        self.subwindow.setWindowTitle("Shock tube: Sod")
+        self._close_filter = base.SubWindowCloseFilter(self._on_closed,
+                                                       self.subwindow)
+        self.subwindow.installEventFilter(self._close_filter)
+        self.subwindow.showMaximized()
+        self.dock = self._build_dock()
+        self._mgr.mainWindow.addDockWidget(Qt.LeftDockWidgetArea, self.dock)
+        self.dock.visibilityChanged.connect(self._sync_dock_action)
+        self.dock_action.setEnabled(True)
+        self._sync_dock_action()
 
-        pressure = base.QuantityLine(
-            name="pressure",
-            unit=r"$\mathrm{Pa}$",
-            color='g',
-            y_upper_lim=1.2,
-            y_bottom_lim=-0.1)
-        setattr(self, pressure.name, pressure)
-        self.plot_data.append([self.pressure.name, True])
+    def _build_dock(self):
+        column = _panel.ConfigColumn()
+        column.show_values(self.config)
+        column.applied = self._on_applied
+        dock = QDockWidget("App config")
+        dock.setWidget(column)
+        return dock
 
-        velocity = base.QuantityLine(
-            name="velocity",
-            unit=r"$\mathrm{m}/\mathrm{s}$",
-            color='b',
-            y_upper_lim=1.2,
-            y_bottom_lim=-0.1)
-        setattr(self, velocity.name, velocity)
-        self.plot_data.append([self.velocity.name, True])
+    def _on_applied(self, values):
+        cfg = self.solver_config
+        for row in range(cfg.rowCount()):
+            cfg.setData(row, 1, values[cfg.data(row, 0)])
+        self.init_solver()
 
-        temperature = base.QuantityLine(
-            name="temperature",
-            unit=r"$\mathrm{K}$",
-            color='c',
-            y_upper_lim=0.15,
-            y_bottom_lim=0.0)
-        setattr(self, temperature.name, temperature)
-        self.plot_data.append([self.temperature.name, False])
+    def _on_dock_toggled(self, checked):
+        if self.dock is not None:
+            self.dock.setVisible(checked)
 
-        internal_energy = base.QuantityLine(
-            name="internal_energy",
-            unit=r"$\mathrm{J}/\mathrm{kg}$",
-            color='k',
-            y_upper_lim=3.0,
-            y_bottom_lim=1.5)
-        setattr(self, internal_energy.name, internal_energy)
-        self.plot_data.append([self.internal_energy.name, False])
+    def _sync_dock_action(self, _visible=None):
+        # Read the dock rather than the signal, which also says False for
+        # a dock tabbed behind another.
+        self.dock_action.setChecked(not self.dock.isHidden())
 
-        entropy = base.QuantityLine(
-            name="entropy",
-            unit=r"$\mathrm{J}/\mathrm{K}$",
-            color='m',
-            y_upper_lim=2.2,
-            y_bottom_lim=0.9)
-        setattr(self, entropy.name, entropy)
-        self.plot_data.append([self.entropy.name, False])
+    def close(self):
+        """Close the window."""
+        if self.subwindow is not None:
+            self.subwindow.close()
+
+    def _on_closed(self):
+        # Stop the march before Qt deletes the window it draws in.
+        self.timer.stop()
+        if self.dock is not None:
+            self._mgr.mainWindow.removeDockWidget(self.dock)
+            self.dock.deleteLater()
+        self.dock_action.setChecked(False)
+        self.dock_action.setEnabled(False)
+        self.window = None
+        self.subwindow = None
+        self.dock = None
+        self._close_filter = None
 
     def init_solver(self):
-        """
-        Initialize the shock tube solver and set up the initial condition.
-        """
+        """Build the problem from the config table and start it over."""
+        cfg = self.config
         self.st = _shocktube.ShockTube()
-        _s = self.solver_config
-        self.st.build_constant(gamma=_s["gamma"]["value"],
-                               pressure1=_s["p_left"]["value"],
-                               density1=_s["rho_left"]["value"],
-                               pressure5=_s["p_right"]["value"],
-                               density5=_s["rho_right"]["value"])
-        self.st.build_numerical(xmin=_s["xmin"]["value"],
-                                xmax=_s["xmax"]["value"],
-                                ncoord=_s["ncoord"]["value"],
-                                time_increment=_s["time_increment"]["value"])
-        self.st.build_field(t=0)
+        self.st.build_constant(gamma=cfg["gamma"],
+                               pressure1=cfg["p_left"],
+                               density1=cfg["rho_left"],
+                               pressure5=cfg["p_right"],
+                               density5=cfg["rho_right"])
+        self.st.build_numerical(xmin=cfg["xmin"], xmax=cfg["xmax"],
+                                ncoord=cfg["ncoord"],
+                                time_increment=cfg["time_increment"])
+        self.exact = _riemann.ExactRiemann(
+            (cfg["rho_left"], 0.0, cfg["p_left"]),
+            (cfg["rho_right"], 0.0, cfg["p_right"]), gamma=cfg["gamma"])
+        self.window.show_waves(self.exact)
+        self.window.xt.set_waves(self.exact.waves, self.exact.x0,
+                                 cfg["max_steps"] * cfg["time_increment"])
+        self.xt_times, self.xt_rows = [], []
+        self.timer.stop()
+        self.timer.setInterval(cfg["time_interval"])
+        self.current_step = 0
+        self.state = 'ready'
+        self.draw()
 
-    def update_step(self, steps):
+    def run_or_pause(self):
+        """Run, pause, resume, or run again from t = 0."""
+        if 'running' == self.state:
+            self.timer.stop()
+            self.state = 'paused'
+        else:
+            if 'finished' == self.state:
+                self.init_solver()
+            self.state = 'running'
+            self.timer.start()
+        self.draw()
+
+    def step(self):
+        """March one step, and stop the march at the last one."""
+        if 'finished' == self.state:
+            return
+        if 'ready' == self.state:
+            self.state = 'paused'
+        self.st.svr.march_alpha2(steps=1)
+        self.current_step += 1
+        if self.current_step >= self.config["max_steps"]:
+            self.timer.stop()
+            self.state = 'finished'
+        self.draw()
+
+    def draw(self):
+        """Draw the current step over the analytic solution at its time."""
+        cfg = self.config
+        time = self.current_step * cfg["time_increment"]
+        svr = self.st.svr
+        points = (svr.coord[svr.xindices],
+                  {name: getattr(svr, name)[svr.xindices]
+                   for name, _ in _window.QUANTITIES})
+        if 'cells' == self.window.exact_mode():
+            exact = self.exact_averages(points[0], time)
+        else:
+            coord = np.linspace(cfg["xmin"], cfg["xmax"], self.EXACT_POINTS,
+                                dtype='float64')
+            exact = (coord, self.exact_values(coord, time))
+        self.window.plot.set_data((cfg["xmin"], cfg["xmax"]), exact, points)
+        means = self.exact_averages(points[0], time)[1]
+        self.window.plot.set_reference({name: value[::2]
+                                        for name, value in means.items()})
+        self.window.plot.set_fronts(self.exact.positions(time),
+                                    self.exact.x0)
+        # A redraw of the same step, on a pause, adds no row.
+        if len(self.xt_rows) == self.current_step:
+            self.xt_times.append(time)
+            self.xt_rows.append(points[1]['density'].copy())
+        self.window.xt.set_label(f"density, {MARCH_LABEL}")
+        self.window.xt.set_history((cfg["xmin"], cfg["xmax"]), points[0],
+                                   self.xt_times, self.xt_rows)
+        self.window.set_title("Sod", time)
+        self.window.legend.set_entries([
+            ('line', "exact" if 'points' == self.window.exact_mode()
+             else "exact cell means"),
+            ('marker', MARCH_LABEL)])
+        self.window.show_state(self.state, self.current_step,
+                               cfg["max_steps"])
+
+    def exact_values(self, coord, time):
+        """Return the exact solution at ``coord`` and ``time`` by the name of
+        each quantity of the window."""
+        return self._quantities(self.exact.sample(coord, time))
+
+    def exact_averages(self, centres, time):
+        """Return ``(x, values)`` of the exact solution averaged over the
+        cells around ``centres`` at ``time``, as steps that span each cell.
+
+        The faces sit midway between the centres, and the end cells reach
+        half a cell out but not past the ends of the tube.
         """
-        Update data at current step.
-            - numerical data solved in c++
-            - analytical data solved in python
-        """
-        self.st.svr.march_alpha2(steps=steps)
-        self.current_step += steps
-        time_current = self.current_step * self.st.svr.time_increment
-        self.st.build_field(t=time_current)
-        cfl = self.st.svr.cfl
-        self.log(f"CFL: min {cfl.min()} max {cfl.max()}")
+        cfg = self.config
+        middle = 0.5 * (centres[:-1] + centres[1:])
+        faces = np.concatenate([2.0 * centres[:1] - middle[:1], middle,
+                                2.0 * centres[-1:] - middle[-1:]])
+        faces = np.clip(faces, cfg["xmin"], cfg["xmax"])
+        values = self._quantities(self.exact.averages(faces, time))
+        return (np.repeat(faces, 2)[1:-1],
+                {name: np.repeat(value, 2) for name, value in values.items()})
+
+    def _quantities(self, sol):
+        rho, vel, pre = sol['rho'], sol['u'], sol['p']
+        gamma = self.exact.gamma
+        return {'density': rho, 'velocity': vel, 'pressure': pre,
+                'temperature': pre / (rho * _shocktube.ShockTube.R),
+                'internal_energy': _riemann.derive('e', rho, vel, pre, gamma),
+                'entropy': _riemann.derive('s', rho, vel, pre, gamma)}
 
 
 def build_app(controller):
     """Build the app on the pilot."""
-    return Euler1DApp(mgr=controller.mgr)
+    return ShockTubeApp(mgr=controller.mgr)
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:

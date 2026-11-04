@@ -72,6 +72,7 @@ def main():
             'solvcon.apps',
             'solvcon.apps.obsrefl',
             'solvcon.apps.shocktube',
+            'solvcon.apps.yamanote',
             'solvcon.benchmark',
             'solvcon.mesh',
             'solvcon.multidim',
