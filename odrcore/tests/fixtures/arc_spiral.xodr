@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OpenDRIVE>
+  <header revMajor="1" revMinor="8" name="curve" version="1.0"
+          date="2026-10-26" north="0" south="0" east="0" west="0"
+          vendor="odrcore tests"/>
+  <road name="Bend" length="130.0" id="7" junction="-1" rule="LHT">
+    <planView>
+      <geometry s="0.0" x="10.0" y="20.0" hdg="0.5" length="30.0">
+        <line/>
+      </geometry>
+      <geometry s="30.0" x="36.32704" y="34.38276" hdg="0.5" length="40.0">
+        <spiral curvStart="0.0" curvEnd="0.02"/>
+      </geometry>
+      <geometry s="70.0" x="68.0" y="60.0" hdg="0.9" length="40.0">
+        <arc curvature="0.02"/>
+      </geometry>
+      <geometry s="110.0" x="90.0" y="90.0" hdg="1.7" length="20.0">
+        <paramPoly3 aU="0" bU="20" cU="0" dU="0" aV="0" bV="0" cV="1"
+                    dV="0" pRange="normalized"/>
+      </geometry>
+    </planView>
+    <elevationProfile>
+      <elevation s="0.0" a="5.0" b="0.0" c="0.001" d="0.0"/>
+    </elevationProfile>
+    <lateralProfile>
+      <superelevation s="30.0" a="0.0" b="0.001" c="0.0" d="0.0"/>
+      <superelevation s="70.0" a="0.04" b="0.0" c="0.0" d="0.0"/>
+    </lateralProfile>
+    <lanes>
+      <laneSection s="0.0">
+        <left>
+          <lane id="1" type="driving" level="false" direction="standard">
+            <width sOffset="0.0" a="3.0" b="0.0" c="0.0" d="0.0"/>
+            <roadMark sOffset="0.0" type="solid" color="white" width="0.1"/>
+          </lane>
+        </left>
+        <center>
+          <lane id="0" type="none" level="false">
+            <roadMark sOffset="0.0" type="broken" color="white" width="0.1"/>
+          </lane>
+        </center>
+        <right>
+          <lane id="-1" type="driving" level="false" direction="both">
+            <border sOffset="0.0" a="-3.0" b="0.0" c="0.0" d="0.0"/>
+            <roadMark sOffset="0.0" type="solid" color="white" width="0.1"/>
+          </lane>
+          <lane id="-2" type="biking" level="false" direction="reversed">
+            <border sOffset="0.0" a="-4.5" b="0.0" c="0.0" d="0.0"/>
+            <border sOffset="30.0" a="-4.5" b="-0.05" c="0.0" d="0.0"/>
+            <roadMark sOffset="0.0" type="solid" color="white" width="0.1"/>
+          </lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>

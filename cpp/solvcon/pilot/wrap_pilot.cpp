@@ -237,7 +237,8 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapRDomainWidget
                 py::arg("sx") = 1.0f,
                 py::arg("sy") = 1.0f,
                 py::arg("sz") = 1.0f,
-                "Set a named object's translate and scale model transform.")
+                py::arg("yaw") = 0.0f,
+                "Set a named object's model transform: translate, then yaw about z in radians, then scale.")
             .def(
                 "setObjectVisible",
                 &wrapped_type::setObjectVisible,
@@ -248,7 +249,32 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapRDomainWidget
                 &wrapped_type::setObjectOpacity,
                 py::arg("name"),
                 py::arg("opacity"))
+            .def(
+                "setObjectColor",
+                &wrapped_type::setObjectColor,
+                py::arg("name"),
+                py::arg("r"),
+                py::arg("g"),
+                py::arg("b"),
+                py::arg("a") = 1.0f,
+                "Set a named object's flat color; the opacity still scales the alpha.")
             .def("objectNames", &wrapped_type::objectNames)
+            .def(
+                "addLabel",
+                &wrapped_type::addLabel,
+                py::arg("name"),
+                py::arg("text"),
+                py::arg("x"),
+                py::arg("y"),
+                py::arg("z"),
+                py::arg("dx") = 8.0f,
+                py::arg("dy") = 0.0f,
+                "Anchor a fixed-size text label at a world point, shifted by (dx, dy) pixels; a name is replaced.")
+            .def("removeLabel", &wrapped_type::removeLabel, py::arg("name"))
+            .def("clearLabels", &wrapped_type::clearLabels)
+            .def("showLabels", &wrapped_type::showLabels, py::arg("show"))
+            .def_property_readonly("labelsShown", &wrapped_type::labelsShown)
+            .def("labelNames", &wrapped_type::labelNames)
             .def("showMesh", &wrapped_type::showMesh, py::arg("show"))
             .def("setMeshOpacity", &wrapped_type::setMeshOpacity, py::arg("opacity"))
             .def("setFieldOpacity", &wrapped_type::setFieldOpacity, py::arg("opacity"))

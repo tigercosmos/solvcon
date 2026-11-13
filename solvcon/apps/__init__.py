@@ -16,10 +16,12 @@ pilot toggle so the problem still runs headlessly.
 
 from . import obsrefl
 from . import shocktube
+from . import yamanote
 
 __all__ = [
     'obsrefl',
     'shocktube',
+    'yamanote',
 ]
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:
