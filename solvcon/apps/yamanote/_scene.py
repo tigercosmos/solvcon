@@ -74,8 +74,11 @@ class Station(object):
 
 class Scene(object):
     """The loaded map, each loop's road chain and the stations on it, and
-    the streets grouped for drawing.
+    the streets grouped for drawing. A scene built with ``path=None`` holds
+    no line, so any street map draws alone.
 
+    :ivar map: The line map, or None without the line.
+    :ivar loops: The loops drawn, :data:`LOOPS` or empty without the line.
     :ivar roads_map: The street map, or None without one.
     :ivar road_groups: The streets by object name,
         ``roads.<segment>.major`` or ``roads.<segment>.minor``, where the
@@ -105,9 +108,12 @@ class Scene(object):
     SIGNAL_POLE_SIZE = (0.15, 0.15, 5.0)
 
     def __init__(self, path=MAP_PATH, roads_path=None):
-        self.map = odrcore.load(path)
-        self.chains = {loop: loop_chain(self.map, loop) for loop in LOOPS}
-        self.stations = [st for loop in LOOPS for st in self._stops(loop)]
+        self.map = None if path is None else odrcore.load(path)
+        self.loops = () if self.map is None else LOOPS
+        self.chains = {loop: loop_chain(self.map, loop)
+                       for loop in self.loops}
+        self.stations = [st for loop in self.loops
+                         for st in self._stops(loop)]
         if roads_path is None:
             roads_path = ROADS_PATH
         self.roads_map, self.road_groups, self.segments = None, {}, {}

@@ -78,7 +78,7 @@ class TrainController(object):
         self._viewer = None
         self.lines = {}
         self.timetables = {}
-        for loop in _scene.LOOPS:
+        for loop in self._scene.loops:
             line = LoopLine(scene.chains[loop])
             stops = [st.s for st in scene.stations if st.loop == loop]
             self.lines[loop] = line
@@ -101,7 +101,7 @@ class TrainController(object):
 
     @property
     def names(self):
-        return [self.train_name(loop, k) for loop in _scene.LOOPS
+        return [self.train_name(loop, k) for loop in self._scene.loops
                 for k in range(self.timetables[loop].ntrain)]
 
     @property
@@ -125,7 +125,7 @@ class TrainController(object):
     def attach(self, viewer, mesh):
         """Add a wide slab for every loop and a box of ``mesh`` for every
         car to ``viewer``, place them and start checking the detail."""
-        for loop in _scene.LOOPS:
+        for loop in self._scene.loops:
             name = self._scene.wide_name(loop)
             viewer.addObject(name, self._scene.loop_mesh(
                 loop, self._scene.WIDE_HALF_WIDTH))
@@ -182,7 +182,7 @@ class TrainController(object):
         wide = distance > LOD_WIDE_DISTANCE
         if force or wide != self.lod_wide:
             self.lod_wide = wide
-            for loop in _scene.LOOPS:
+            for loop in self._scene.loops:
                 viewer.setObjectVisible(loop, not wide)
                 viewer.setObjectVisible(self._scene.wide_name(loop), wide)
             if self.wide_changed is not None:
@@ -216,7 +216,7 @@ class TrainController(object):
         width *= self.lod_factor
         height *= self.lod_factor
         lift = height / 2.0
-        for loop in _scene.LOOPS:
+        for loop in self._scene.loops:
             line, tt = self.lines[loop], self.timetables[loop]
             for k in range(tt.ntrain):
                 name = self.train_name(loop, k)

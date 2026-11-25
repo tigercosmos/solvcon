@@ -160,6 +160,30 @@ class YamanoteAppTC(unittest.TestCase):
             ('roads.', 'marks.', 'crosswalks.', 'signals.'))})
         self.assertTrue(feature.control.update_lod(force=True))
 
+    def test_open_map_draws_its_streets_without_the_line(self):
+        feature = self.feature
+        self.assertEqual(
+            "Open Road Map...",
+            self.mgr.menu_model.action("view.yamanote.open").text())
+        feature.run()
+        line_viewer = feature.viewer
+        feature.open_map(self.roads_path)
+        self.assertIsNot(line_viewer, feature.viewer)
+        self.assertEqual((), feature.scene.loops)
+        self.assertEqual([], feature.control.names)
+        names = set(feature.viewer.objectNames())
+        self.assertEqual(set(synthetic_roads.GROUPS)
+                         | set(synthetic_roads.DETAILS), names)
+        self.assertEqual(set(), set(feature.viewer.labelNames()))
+        self.assertTrue(feature.control.update_lod(force=True))
+        self.assertTrue(all(feature.roads.shown.values()))
+
+        feature.show_line()
+        self.assertEqual(_scene.LOOPS, feature.scene.loops)
+        self.assertEqual(30, len(feature.control.names))
+        self.assertTrue(set(_scene.LOOPS)
+                        <= set(feature.viewer.objectNames()))
+
     def test_every_station_is_labeled_once(self):
         feature = self.feature
         feature.run()

@@ -131,6 +131,13 @@ class SceneRoadsTC(unittest.TestCase):
             scene = _scene.Scene()
         self.assertEqual(set(synthetic_roads.GROUPS), set(scene.road_groups))
 
+    def test_a_street_map_draws_alone_without_the_line(self):
+        scene = _scene.Scene(path=None, roads_path=self.roads_path)
+        self.assertIsNone(scene.map)
+        self.assertEqual((), scene.loops)
+        self.assertEqual(({}, []), (scene.chains, scene.stations))
+        self.assertEqual(set(synthetic_roads.GROUPS), set(scene.road_groups))
+
 
 class SceneWithoutRoadsTC(unittest.TestCase):
 
