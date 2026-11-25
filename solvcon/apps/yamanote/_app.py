@@ -119,19 +119,19 @@ class YamanoteApp(base.PilotFeature):
         viewer.setView("iso")
         self._watch_close()
         self._viewer = viewer
-        self._pycon.writeToHistory(
+        self._write_message(
             f"yamanote: {len(scene.stations)} stops and "
             f"{len(self._control.names)} trains on "
             f"{len(_scene.LOOPS)} loops\n")
         if self._roads is not None:
             seconds = scene.roads_seconds + self._roads.build_seconds
-            self._pycon.writeToHistory(
+            self._write_message(
                 f"yamanote: {scene.road_count} roads in "
                 f"{len(scene.road_groups)} groups, loaded and meshed in "
                 f"{seconds:.1f} s\n")
             marks = sum(name.startswith('marks.')
                         for name in self._roads.names)
-            self._pycon.writeToHistory(
+            self._write_message(
                 f"yamanote: {marks} mark objects, "
                 f"{scene.crosswalk_count} crosswalks and "
                 f"{scene.signal_count} signals\n")
