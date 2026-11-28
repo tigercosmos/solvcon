@@ -18,12 +18,6 @@ set(SOLVCON_PILOT_PYMODHEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/theme/RWindowsThemeBackend.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/theme/RLinuxThemeBackend.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/theme/RThemeManager.hpp
-    # console/
-    ${CMAKE_CURRENT_SOURCE_DIR}/console/RPythonConsoleDockWidget.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/console/RPythonTerminalDockWidget.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/console/RPythonConsoleHistory.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/console/RPythonSyntaxHighlighter.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/console/RPythonSyntaxRules.hpp
     # visual/
     ${CMAKE_CURRENT_SOURCE_DIR}/visual/RDomainWidget.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/visual/RScene.hpp
@@ -51,6 +45,7 @@ set(SOLVCON_PILOT_PYMODHEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/plot/RPlotModel.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/plot/RPlotTicker.hpp
     # app/
+    ${CMAKE_CURRENT_SOURCE_DIR}/app/RChromeStyle.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/app/RManager.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/app/RMenuModel.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/app/keymap.hpp
@@ -74,12 +69,6 @@ set(SOLVCON_PILOT_PYMODSOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/theme/RWindowsThemeBackend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/theme/RLinuxThemeBackend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/theme/RThemeManager.cpp
-    # console/
-    ${CMAKE_CURRENT_SOURCE_DIR}/console/RPythonConsoleDockWidget.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/console/RPythonTerminalDockWidget.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/console/RPythonConsoleHistory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/console/RPythonSyntaxHighlighter.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/console/RPythonSyntaxRules.cpp
     # visual/
     ${CMAKE_CURRENT_SOURCE_DIR}/visual/RDomainWidget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/visual/RScene.cpp
@@ -98,6 +87,7 @@ set(SOLVCON_PILOT_PYMODSOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/visual/RMaterial.cpp
     # canvas/
     ${CMAKE_CURRENT_SOURCE_DIR}/canvas/RTextOverlay.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/canvas/RLabelOverlay.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/canvas/R2DWidget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/canvas/DrawTool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/canvas/RWorldRenderer2d.cpp
@@ -109,6 +99,7 @@ set(SOLVCON_PILOT_PYMODSOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/plot/RPlotTicker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/plot/wrap_plot.cpp
     # app/
+    ${CMAKE_CURRENT_SOURCE_DIR}/app/RChromeStyle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/app/RManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/app/RMenuModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/app/keymap.cpp
@@ -116,6 +107,7 @@ set(SOLVCON_PILOT_PYMODSOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/app/RAction.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/app/RThreadManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/app/wrap_RThreadManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/app/wrap_RChromeStyle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/wrap_pilot.cpp
     CACHE FILEPATH "" FORCE
 )

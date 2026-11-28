@@ -72,7 +72,8 @@ class RunHistory(object):
 
 
 class ReflectionSession(object):
-    """Own one oblique-shock reflection run.
+    """March the 2D CESE Euler solver through one oblique-shock reflection
+    run.
 
     Building the session builds the flow constants, the mesh, and the solver,
     so a session exists only around a run that is ready to march.  Each
@@ -144,6 +145,19 @@ class ReflectionSession(object):
         while not self.finished:
             self.advance()
         return self.stop_reason
+
+    def set_max_steps(self, max_steps):
+        """Move the step cap: a run at or past the new cap ends there, and
+        a run the old cap ended goes on under a higher one.
+
+        :param max_steps: The new step cap.
+        """
+        self.max_steps = max_steps
+        if self.step >= max_steps:
+            if not self.finished:
+                self.stop_reason = 'cap'
+        elif 'cap' == self.stop_reason:
+            self.stop_reason = None
 
     def stop(self):
         """End the run where it stands, keeping the field and the history."""

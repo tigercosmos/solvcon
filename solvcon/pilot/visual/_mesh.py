@@ -27,7 +27,8 @@ class SampleMesh:
     The built-in sample meshes as data.
 
     Each ``mesh_*`` method builds and returns a :class:`StaticMesh` with no
-    Qt, so the same example meshes serve the GUI feature and the console.
+    Qt, so the same example meshes serve the GUI feature and the Console
+    panel.
     """
 
     def make(self, name):
@@ -40,6 +41,11 @@ class SampleMesh:
         """The sample-mesh names, in definition (menu) order."""
         return tuple(name[len('mesh_'):] for name in vars(cls)
                      if name.startswith('mesh_'))
+
+    @staticmethod
+    def title(name):
+        """The sub-window title of the sample mesh named ``name``."""
+        return f"Sample: {name}"
 
     def mesh_triangle(self):
         mh = core.StaticMesh(ndim=2, nnode=4, nface=0, ncell=3)
@@ -260,10 +266,14 @@ class MeshDrawer:
     def __init__(self, mgr):
         self._mgr = mgr
 
-    def show(self, mh, viewer=None):
+    def show(self, mh, viewer=None, title=None):
         """
         Show ``mh`` in ``viewer``, or in a new 3D viewer when it is None,
         and return the viewer.
+
+        Name the sub-window ``title``.  A given viewer takes the new title
+        too, so the viewer does not keep the name of its old mesh.  Without
+        a title, the viewer takes the default title.
         """
         if viewer is None:
             w = self._mgr.add3DWidget()
@@ -274,15 +284,16 @@ class MeshDrawer:
                 for ibc in range(w.mesh.nbcs):
                     w.showBoundary(ibc, False)
         w.updateMesh(mh)
+        w.windowTitle = title or ""
         w.showAxis(True)
         for ibc in range(mh.nbcs):
             w.showBoundary(ibc, True)
         return w
 
-    def draw(self, mh, label, notes=None, viewer=None):
+    def draw(self, mh, label, notes=None, viewer=None, title=None):
         """
-        Show ``mh`` like :meth:`show` and write a summary to the console,
-        and return the viewer.
+        Show ``mh`` like :meth:`show`, in a sub-window named ``title``.
+        Write a summary to the user and return the viewer.
 
         ``draw(mh, "quad", notes={'left': "red inlet"})`` on a 4x2 quad
         rectangle writes::
@@ -292,8 +303,8 @@ class MeshDrawer:
 
         An unnamed boundary group shows as ``bc0``, ``bc1``, and so on.
         """
-        w = self.show(mh, viewer=viewer)
-        self._mgr.pycon.writeToHistory(self._describe_mesh(mh, label, notes))
+        w = self.show(mh, viewer=viewer, title=title)
+        base.write_message(self._describe_mesh(mh, label, notes))
         return w
 
     @staticmethod
@@ -363,7 +374,8 @@ class SampleMeshFeature(base.PilotFeature):
     def _show(self, name):
         """Draw the sample mesh ``name`` (e.g. 'triangle') and return the
         viewer."""
-        return MeshDrawer(self._mgr).draw(self._samples.make(name), name)
+        return MeshDrawer(self._mgr).draw(
+            self._samples.make(name), name, title=SampleMesh.title(name))
 
     def mesh_triangle(self):
         return self._show('triangle')
@@ -508,7 +520,7 @@ class MeshStyleStatus(QtCore.QObject):
         """Show or hide ``name`` in the active viewer, then refresh the UIs."""
         widget = self._mgr.currentR3DWidget()
         if widget is None:
-            self._mgr.pycon.writeToHistory(
+            base.write_message(
                 "No active 3D viewer to toggle the mesh style\n")
         else:
             widget.showMeshStyle(name, shown)
@@ -593,15 +605,16 @@ class GmshFileDialog(base.PilotFeature):
 
     def _load_gmsh_file(self, filename):
         if not os.path.exists(filename):
-            self._pycon.writeToHistory(f"{filename} does not exist\n")
+            self._write_message(f"{filename} does not exist\n")
             return
 
         with open(filename, 'rb') as fobj:
             data = fobj.read()
-        self._pycon.writeToHistory(f"gmsh mesh file {filename} is read\n")
+        self._write_message(f"gmsh mesh file {filename} is read\n")
         gmsh = core.Gmsh(data)
         mh = gmsh.to_block()
-        self._pycon.writeToHistory("StaticMesh object created from gmsh\n")
-        return MeshDrawer(self._mgr).draw(mh, os.path.basename(filename))
+        self._write_message("StaticMesh object created from gmsh\n")
+        name = os.path.basename(filename)
+        return MeshDrawer(self._mgr).draw(mh, name, title=name)
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:

@@ -17,9 +17,7 @@ Tools to run applications
 import code
 import contextlib
 import importlib
-import inspect
 import io
-import re
 import rlcompleter
 import sys
 # It must import at the end, because a from-import follows the plain imports.
@@ -33,65 +31,33 @@ __all__ = [
     'AppEnvironment',
     'get_current_appenv',
     'get_completions',
-    'get_call_tip',
-    'run_code',
-    'push_code',
-    'reset_console',
     'run_worker',
+    'stdin_at_eof',
     'stop_code',
     'build_pilot_namespace',
     'format_banner',
     'install_pilot_namespace',
+    'PILOT_CONSOLE_NOTE',
 ]
 
 
+# What the console says when it starts; help_pilot() prints the full list.
+PILOT_CONSOLE_NOTE = (
+    "solvcon pilot console. Call help_pilot() to print help.\n")
+
 # A lazily created single-thread pool that backs run_worker.
 _worker_pool = None
-
-
-# A dotted identifier chain such as ``range`` or ``mgr.add3DWidget``. The
-# call tip only introspects such an expression, never one that calls or
-# subscripts, so evaluating it cannot run arbitrary user code.
-_IDENTIFIER_CHAIN = re.compile(
-    r'[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$')
 
 
 # All environment objects of this process.
 environ = {}
 
 
-class _ConsoleInterpreter(code.InteractiveConsole):
-    """
-    A :class:`code.InteractiveConsole` bound to an application namespace.
-
-    The console compiles in ``"single"`` mode, so a bare expression is
-    auto-displayed and bound to ``_`` the way the standard read-eval-print
-    loop does. Exceptions are formatted against the user's own input by
-    :meth:`showtraceback` and :meth:`showsyntaxerror`, not the host stack.
-
-    ``exit()`` or ``quit()`` typed in the console raises :exc:`SystemExit`,
-    which would tear down the interpreter that the pilot embeds. Guard it
-    here so the console reports the request without ending the process.
-    """
-    def push(self, line):
-        try:
-            return super().push(line)
-        except SystemExit:
-            self.write("SystemExit: use the window controls to quit.\n")
-            self.resetbuffer()
-            return False
-
-
 @contextlib.contextmanager
-def _stdin_at_eof():
+def stdin_at_eof():
     """
-    Present an exhausted ``sys.stdin`` for the duration of a command.
-
-    The embedded console has no interactive input. A command that reads
-    stdin, such as a bare ``help()`` that starts pydoc's interactive
-    browser, would otherwise block the GUI thread forever waiting for a
-    line that never arrives. An empty stream reads as immediate EOF, so
-    the read ends at once and the command returns.
+    Make ``sys.stdin`` read as EOF, so ``input()`` or a bare ``help()`` in a
+    command returns instead of blocking the GUI thread.
     """
     saved = sys.stdin
     sys.stdin = io.StringIO()
@@ -105,9 +71,9 @@ class AppEnvironment:
     """
     Collects the environment for an application.
 
-    The read-eval-print loop uses a single namespace, so :ivar:`globals`
-    and :ivar:`locals` are the same dict: names bound by executed code and
-    names injected by the pilot are both visible to the interpreter.
+    The console uses a single namespace, so :ivar:`globals` and
+    :ivar:`locals` are the same dict: names bound by executed code and names
+    injected by the pilot are both visible to the interpreter.
 
     :ivar globals:
         The namespace of the application.
@@ -118,13 +84,12 @@ class AppEnvironment:
         namespace = {
             # Give the application an alias of the top package.
             'sc': importlib.import_module('solvcon'),
-            'appenv': self,
         }
         self.globals = namespace
         self.locals = namespace
         self.name = name
         self.namespace_refreshers = []
-        self.console = _ConsoleInterpreter(namespace)
+        self.console = code.InteractiveConsole(namespace)
         # Each run of the application appends a new environment.
         environ[name] = self
 
@@ -141,47 +106,11 @@ class AppEnvironment:
         """
         self.namespace_refreshers.append(refresh)
 
-    def run_code(self, source):
-        """
-        Feed a possibly multi-line command to the persistent interpreter.
-
-        Each line drives ``push()``, which returns whether more input is
-        needed to complete the statement. A block left open after the last
-        line is closed with a blank line, the way a blank line ends a
-        compound statement in the interactive interpreter.
-
-        :return: True when the interpreter is still waiting for more input.
-        """
+    def refresh_namespace(self):
+        """Run the refreshers, so the namespace tracks the live session
+        before the next command or completion reads it."""
         for refresh in self.namespace_refreshers:
             refresh(self.globals)
-        more = False
-        # The treatment is for the console UI that has I/O in separate text
-        # boxes. After having an alternate terminal UI, it will have stdio.
-        with _stdin_at_eof():
-            for line in source.split('\n'):
-                more = self.console.push(line)
-            if more:
-                more = self.console.push('')
-        return more
-
-    def push_line(self, line):
-        """
-        Push a single line to the persistent interpreter, interactively.
-
-        Unlike :meth:`run_code`, this does not close an open block with a
-        trailing blank line: it hands the interpreter one line and reports
-        whether the statement is still incomplete, so a terminal UI can show
-        a continuation prompt and keep collecting input. The namespace is
-        refreshed once at the start of a statement, when no partial input is
-        buffered.
-
-        :return: True when the interpreter is waiting for more input.
-        """
-        if not self.console.buffer:
-            for refresh in self.namespace_refreshers:
-                refresh(self.globals)
-        with _stdin_at_eof():
-            return self.console.push(line)
 
 
 def get_appenv(name=None):
@@ -224,65 +153,17 @@ def get_completions(text):
     return completions
 
 
-def get_call_tip(expr):
-    """
-    A signature and docstring summary for the callable named by ``expr``.
-
-    ``expr`` is a dotted identifier chain such as ``range`` or
-    ``mgr.add3DWidget``. It is resolved against the current namespace, so,
-    like the introspective completion, it can touch live objects. It is
-    never evaluated when it is anything other than an identifier chain, so
-    a call or subscript cannot run arbitrary code. Returns an empty string
-    when the expression does not resolve to a callable.
-    """
-    expr = expr.strip()
-    if not _IDENTIFIER_CHAIN.match(expr):
-        return ''
-    aenv = get_current_appenv()
-    namespace = {'__builtins__': __builtins__}
-    namespace.update(aenv.globals)
-    try:
-        obj = eval(expr, namespace)
-    except Exception:
-        return ''
-    if not callable(obj):
-        return ''
-    try:
-        signature = str(inspect.signature(obj))
-    except (TypeError, ValueError):
-        signature = '(...)'
-    tip = expr + signature
-    doc = inspect.getdoc(obj)
-    if doc:
-        tip += '\n' + doc.strip().split('\n\n')[0]
-    return tip
-
-
-def run_code(source):
-    aenv = get_current_appenv()
-    return aenv.run_code(source)
-
-
-def push_code(line):
-    aenv = get_current_appenv()
-    return aenv.push_line(line)
-
-
-def reset_console():
-    """Abandon any partially entered statement in the current console."""
-    get_current_appenv().console.resetbuffer()
-
-
 def run_worker(func, *args, **kwargs):
     """
     Run ``func`` on a background worker thread and return its Future.
 
-    A command in the console runs on the GUI thread, so heavy work freezes
-    the window until it returns; the console cannot interrupt a running
-    command in-process. Hand such work to this helper instead: the solver
-    core releases the GIL while it computes, so the GUI stays responsive.
     Poll the returned :class:`concurrent.futures.Future` for the result.
     """
+    # A console command runs on the GUI thread, so heavy work freezes the
+    # window until it returns. Ctrl-C in the terminal stops it only between
+    # Python steps, not inside a long solver call, and then quits the pilot.
+    # The solver core releases the GIL while it computes, so the GUI stays
+    # responsive while this worker runs the work.
     global _worker_pool
     if _worker_pool is None:
         _worker_pool = ThreadPoolExecutor(
@@ -308,10 +189,11 @@ def build_pilot_namespace(mgr):
     is a name-to-object dict to seed the namespace and ``entries`` is an
     ordered list of ``(name, description)`` for the banner.
     """
-    def show_mesh(m):
-        """Open a mesh in a fresh 3D viewer and return the viewer."""
+    def show_mesh(m, title=None):
+        """Open a mesh in a fresh 3D viewer named title and return the
+        viewer.  Without a title the viewer takes the default title."""
         from .pilot import visual
-        return visual.MeshDrawer(mgr).show(m)
+        return visual.MeshDrawer(mgr).show(m, title=title)
 
     def viewers():
         """List the open 3D viewers."""
@@ -325,7 +207,8 @@ def build_pilot_namespace(mgr):
         """Build a built-in sample mesh, show it in a fresh 3D viewer, and
         return the viewer.  Call sample_meshes() for the available names."""
         from .pilot import visual
-        return show_mesh(visual.SampleMesh().make(name))
+        return show_mesh(visual.SampleMesh().make(name),
+                         title=visual.SampleMesh.title(name))
 
     def sample_meshes():
         """List the names of the built-in sample meshes."""
@@ -379,7 +262,8 @@ def install_pilot_namespace(mgr, appenv, extra=None):
     Seed the console namespace from the pilot manager and keep it fresh.
 
     The dynamic handles (``viewer``, ``mesh``) are refreshed before each
-    command so they track the focused viewer.
+    command so they track the focused viewer. ``help_pilot()`` prints the
+    banner.
 
     :param mgr: The pilot manager.
     :param appenv: The :class:`AppEnvironment` to seed.
@@ -393,9 +277,12 @@ def install_pilot_namespace(mgr, appenv, extra=None):
     if extra is not None:
         handles.update(extra[0])
         entries.extend(extra[1])
+    entries.append(('help_pilot()', 'print this list'))
+    banner = format_banner(entries)
+    handles['help_pilot'] = lambda: print(banner, end="")
     appenv.seed(**handles)
     appenv.add_namespace_refresher(
         lambda namespace: _refresh_pilot_namespace(mgr, namespace))
-    return format_banner(entries)
+    return banner
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:

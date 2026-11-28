@@ -4,6 +4,7 @@
 
 import os
 import unittest
+from unittest import mock
 
 import solvcon
 from solvcon import testing
@@ -72,18 +73,15 @@ class _FakeViewer:
         self.calls.append(('boundary', ibc, flag))
 
 
-class _FakeConsole:
-    def __init__(self):
-        self.history = []
-
-    def writeToHistory(self, text):
-        self.history.append(text)
-
-
 class _FakeManager:
     def __init__(self):
         self.viewers = []
-        self.pycon = _FakeConsole()
+        self.messages = []
+
+    def capture_messages(self):
+        from solvcon.pilot.base import _gui_common
+        return mock.patch.object(_gui_common, "_message_sink",
+                                 self.messages.append)
 
     def add3DWidget(self):
         self.viewers.append(_FakeViewer())
@@ -97,6 +95,9 @@ class MeshDrawerTC(unittest.TestCase):
     def setUp(self):
         from solvcon.pilot import visual
         self.mgr = _FakeManager()
+        capture = self.mgr.capture_messages()
+        capture.start()
+        self.addCleanup(capture.stop)
         self.drawer = visual.MeshDrawer(self.mgr)
         self.mh = _make_rectangle()
 
@@ -106,14 +107,14 @@ class MeshDrawerTC(unittest.TestCase):
         self.assertEqual(w.calls[:2], [('mesh', self.mh), ('axis', True)])
         self.assertEqual(
             w.calls[2:], [('boundary', i, True) for i in range(4)])
-        # Only draw() writes the summary; show() keeps the console quiet.
-        self.assertEqual(self.mgr.pycon.history, [])
+        # Only draw() writes the summary; show() writes no message.
+        self.assertEqual(self.mgr.messages, [])
 
     def test_draw_writes_one_summary(self):
         w = self.drawer.draw(self.mh, "quad")
         self.assertEqual(self.mgr.viewers, [w])
-        self.assertEqual(len(self.mgr.pycon.history), 1)
-        self.assertTrue(self.mgr.pycon.history[0].startswith("quad: "))
+        self.assertEqual(len(self.mgr.messages), 1)
+        self.assertTrue(self.mgr.messages[0].startswith("quad: "))
 
     def test_each_draw_opens_a_new_viewer(self):
         first = self.drawer.draw(self.mh, "a")
@@ -136,7 +137,22 @@ class MeshDrawerTC(unittest.TestCase):
         w = self.drawer.draw(self.mh, "a")
         self.assertIs(self.drawer.draw(self.mh, "b", viewer=w), w)
         self.assertEqual(self.mgr.viewers, [w])
-        self.assertEqual(len(self.mgr.pycon.history), 2)
+        self.assertEqual(len(self.mgr.messages), 2)
+
+    def test_viewer_takes_the_given_title(self):
+        w = self.drawer.show(self.mh, title="a")
+        self.assertEqual(w.windowTitle, "a")
+        w = self.drawer.draw(self.mh, "label", title="b")
+        self.assertEqual(w.windowTitle, "b")
+
+    def test_new_mesh_replaces_the_title(self):
+        w = self.drawer.show(self.mh, title="a")
+        self.drawer.show(self.mh, viewer=w, title="b")
+        self.assertEqual(w.windowTitle, "b")
+        # An empty title asks the viewer for its default one, so the name of
+        # the old mesh does not stay.
+        self.drawer.show(self.mh, viewer=w)
+        self.assertEqual(w.windowTitle, "")
 
 
 @testing.requires_pilot
@@ -149,8 +165,9 @@ class MeshSummaryTC(unittest.TestCase):
 
     def _summary(self, mh, label, notes=None):
         mgr = _FakeManager()
-        self.visual.MeshDrawer(mgr).draw(mh, label, notes=notes)
-        return mgr.pycon.history[-1]
+        with mgr.capture_messages():
+            self.visual.MeshDrawer(mgr).draw(mh, label, notes=notes)
+        return mgr.messages[-1]
 
     def test_unnamed_boundary_group_is_called_by_index(self):
         mh = self.visual.SampleMesh().make('triangle')
@@ -187,6 +204,11 @@ class MeshFeatureDrawTC(unittest.TestCase):
     def _nwindow(self):
         return len(self.mgr.mdiArea.subWindowList())
 
+    def _active_title(self):
+        # Hold the area: a sub-window handle dies with a throwaway wrapper.
+        mdi = self.mgr.mdiArea
+        return mdi.activeSubWindow().windowTitle()
+
     def test_every_sample_entry_opens_a_viewer_of_its_mesh(self):
         from solvcon.pilot import visual
         feature = visual.SampleMeshFeature(mgr=self.mgr)
@@ -200,6 +222,8 @@ class MeshFeatureDrawTC(unittest.TestCase):
                 self.assertEqual(before + 1, self._nwindow())
                 self.assertEqual(viewer.mesh.ncell,
                                  samples.make(name).ncell)
+                self.assertEqual(viewer.windowTitle, f"Sample: {name}")
+                self.assertEqual(self._active_title(), f"Sample: {name}")
 
     def test_gmsh_file_opens_a_viewer(self):
         from solvcon.pilot import visual
@@ -210,6 +234,7 @@ class MeshFeatureDrawTC(unittest.TestCase):
         viewer = feature._load_gmsh_file(path)
         self.assertEqual(before + 1, self._nwindow())
         self.assertGreater(viewer.mesh.nbcs, 0)
+        self.assertEqual(self._active_title(), "rectangle.msh")
 
     def test_drawer_replaces_the_mesh_of_a_given_viewer(self):
         from solvcon.pilot import visual
@@ -220,6 +245,19 @@ class MeshFeatureDrawTC(unittest.TestCase):
         self.assertIs(drawer.draw(tri, "triangle", viewer=viewer), viewer)
         self.assertEqual(before, self._nwindow())
         self.assertEqual(viewer.mesh.ncell, tri.ncell)
+
+    def test_untitled_viewer_takes_the_default_title(self):
+        from solvcon.pilot import visual
+        drawer = visual.MeshDrawer(self.mgr)
+        viewer = drawer.show(_make_rectangle())
+        self.assertEqual(self._active_title(), "Domain viewer")
+        viewer = drawer.show(_make_rectangle(), viewer=viewer, title="quad")
+        self.assertEqual(self._active_title(), "quad")
+        # The viewer does not keep the name of the mesh it no longer shows.
+        for title in (None, ""):
+            viewer.windowTitle = "stale"
+            drawer.show(_make_rectangle(), viewer=viewer, title=title)
+            self.assertEqual(self._active_title(), "Domain viewer")
 
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:

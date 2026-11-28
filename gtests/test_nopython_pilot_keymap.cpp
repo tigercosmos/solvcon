@@ -46,7 +46,6 @@ TEST(PilotKeymapTable, SeedsSharedBindingsOnEveryPlatform)
         EXPECT_EQ(reset->context, solvcon::ShortcutContext::Widget);
 
         for (auto const & panel : {
-                 CommandChord{solvcon::ShortcutCommand::AgentPanel, solvcon::Key::A},
                  CommandChord{solvcon::ShortcutCommand::InspectorPanel, solvcon::Key::I},
                  CommandChord{solvcon::ShortcutCommand::PainterPanel, solvcon::Key::P},
              })
@@ -74,13 +73,13 @@ TEST(PilotKeymapTable, SeedsSharedBindingsOnEveryPlatform)
     }
 }
 
-TEST(PilotKeymapTable, ConsoleSharesGraveAcrossPlatforms)
+TEST(PilotKeymapTable, ConsolePanelSharesGraveAcrossPlatforms)
 {
     for (auto platform : PLATFORMS)
     {
-        auto const * console = solvcon::bindingFor(platform, solvcon::ShortcutCommand::Console);
-        ASSERT_NE(console, nullptr);
-        EXPECT_EQ(std::get<solvcon::KeyChord>(console->key),
+        auto const * panel = solvcon::bindingFor(platform, solvcon::ShortcutCommand::ConsolePanel);
+        ASSERT_NE(panel, nullptr);
+        EXPECT_EQ(std::get<solvcon::KeyChord>(panel->key),
                   (solvcon::KeyChord{solvcon::KeyMod::Control, solvcon::Key::Grave}));
     }
 }
@@ -199,19 +198,19 @@ TEST(PilotKeymapConflicts, DefaultTablesHaveNoDeclaredConflicts)
 
 TEST(PilotKeymapConflicts, DeclaredCheckerReportsDuplicateCuratedChord)
 {
-    // A synthetic table where Console steals Undo's usual Primary+Z spelling.
+    // A synthetic table where ConsolePanel steals Undo's usual Primary+Z spelling.
     std::vector<solvcon::ShortcutBinding> table = {
         {solvcon::ShortcutCommand::Undo,
          solvcon::KeyChord{solvcon::KeyMod::Primary, solvcon::Key::Z},
          solvcon::ShortcutContext::Window},
-        {solvcon::ShortcutCommand::Console,
+        {solvcon::ShortcutCommand::ConsolePanel,
          solvcon::KeyChord{solvcon::KeyMod::Primary, solvcon::Key::Z},
          solvcon::ShortcutContext::Window},
     };
     auto const conflicts = solvcon::findDeclaredConflictsIn(table);
     ASSERT_EQ(conflicts.size(), 1U);
     EXPECT_EQ(conflicts[0].first, solvcon::ShortcutCommand::Undo);
-    EXPECT_EQ(conflicts[0].second, solvcon::ShortcutCommand::Console);
+    EXPECT_EQ(conflicts[0].second, solvcon::ShortcutCommand::ConsolePanel);
 }
 
 TEST(PilotKeymapId, CommandFromIdInvertsCommandId)

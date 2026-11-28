@@ -22,6 +22,7 @@
 #include <QPinchGesture>
 #include <QVector4D>
 #include <QWheelEvent>
+#include <QtMath>
 
 #include <algorithm>
 #include <cmath>
@@ -384,7 +385,8 @@ void RDomainWidget::setObjectTransform(
     float tz,
     float sx,
     float sy,
-    float sz)
+    float sz,
+    float yaw)
 {
     auto const it = m_objects.find(name);
     if (it == m_objects.end())
@@ -393,10 +395,13 @@ void RDomainWidget::setObjectTransform(
     }
     QMatrix4x4 model;
     model.translate(tx, ty, tz);
+    model.rotate(qRadiansToDegrees(yaw), 0.0f, 0.0f, 1.0f);
     model.scale(sx, sy, sz);
     it->second.drawable->setModel(model);
 
-    // Grow the framing box to include the transformed object corners.
+    // Grow the framing box to include the transformed object corners. Refit
+    // the camera only on the object's first placement, so an object moved
+    // every frame never resets a view the user has navigated to.
     QVector3D lo;
     QVector3D hi;
     mesh_bounds(*it->second.mesh, lo, hi);
@@ -409,7 +414,11 @@ void RDomainWidget::setObjectTransform(
         QVector3D const mapped = model.map(corner);
         m_scene.extendBoundingBox(mapped, mapped);
     }
-    m_scene.fitCameraToScene(viewportAspect());
+    if (!it->second.placed)
+    {
+        it->second.placed = true;
+        m_scene.fitCameraToScene(viewportAspect());
+    }
     update();
 }
 
@@ -433,6 +442,16 @@ void RDomainWidget::setObjectOpacity(std::string const & name, float opacity)
     }
 }
 
+void RDomainWidget::setObjectColor(std::string const & name, float r, float g, float b, float a)
+{
+    auto const it = m_objects.find(name);
+    if (it != m_objects.end())
+    {
+        it->second.drawable->setColor(QVector4D(r, g, b, a));
+        update();
+    }
+}
+
 std::vector<std::string> RDomainWidget::objectNames() const
 {
     std::vector<std::string> names;
@@ -442,6 +461,31 @@ std::vector<std::string> RDomainWidget::objectNames() const
         names.push_back(entry.first);
     }
     return names;
+}
+
+void RDomainWidget::addLabel(
+    std::string const & name, std::string const & text, float x, float y, float z, float dx, float dy)
+{
+    m_labels.add(name, text, QVector3D(x, y, z), QPointF(dx, dy));
+    update();
+}
+
+void RDomainWidget::removeLabel(std::string const & name)
+{
+    m_labels.remove(name);
+    update();
+}
+
+void RDomainWidget::clearLabels()
+{
+    m_labels.clear();
+    update();
+}
+
+void RDomainWidget::showLabels(bool show)
+{
+    m_labels.setVisible(show);
+    update();
 }
 
 void RDomainWidget::showMesh(bool show)
@@ -1134,6 +1178,7 @@ RDomainWidget::PickResult RDomainWidget::pickCell(int x, int y)
     { return (dm < ndim) ? static_cast<float>(mh.ndcrd(ind, dm)) : 0.0f; };
 
     int32_t hit_cell = -1;
+    QVector3D hit_point;
     if (3 == ndim)
     {
         SimpleArray<int32_t> const & bndfcs = mh.bndfcs();
@@ -1155,6 +1200,7 @@ RDomainWidget::PickResult RDomainWidget::pickCell(int x, int y)
                 {
                     best = t;
                     hit_cell = mh.fcicl(ifc);
+                    hit_point = origin + dir * t;
                 }
             }
         }
@@ -1179,6 +1225,7 @@ RDomainWidget::PickResult RDomainWidget::pickCell(int x, int y)
                     if (point_in_polygon(poly, hit.x(), hit.y()))
                     {
                         hit_cell = static_cast<int32_t>(icl);
+                        hit_point = hit;
                     }
                 }
             }
@@ -1193,6 +1240,7 @@ RDomainWidget::PickResult RDomainWidget::pickCell(int x, int y)
     result.id = hit_cell;
     result.type = mh.cltpn(hit_cell);
     result.measure = static_cast<double>(mh.clvol(hit_cell));
+    result.point = hit_point;
     result.centroid = QVector3D(
         static_cast<float>(mh.clcnd(hit_cell, 0)),
         static_cast<float>(mh.clcnd(hit_cell, 1)),
@@ -1256,6 +1304,7 @@ RDomainWidget::PickResult RDomainWidget::pickNode(int x, int y)
     result.kind = "node";
     result.id = hit;
     result.centroid = hit_pos;
+    result.point = hit_pos;
     setSelection("node", hit, hit_pos, hit_pos);
     return result;
 }
@@ -1285,6 +1334,7 @@ RDomainWidget::PickResult RDomainWidget::pickFace(int x, int y)
     SimpleArray<int32_t> const & bndfcs = mh.bndfcs();
     float best = std::numeric_limits<float>::max();
     int32_t hit_face = -1;
+    QVector3D hit_point;
     for (ssize_t ibnd = 0; ibnd < bndfcs.shape(0); ++ibnd)
     {
         int32_t const ifc = bndfcs(ibnd, 0);
@@ -1302,6 +1352,7 @@ RDomainWidget::PickResult RDomainWidget::pickFace(int x, int y)
             {
                 best = t;
                 hit_face = ifc;
+                hit_point = origin + dir * t;
             }
         }
     }
@@ -1312,6 +1363,7 @@ RDomainWidget::PickResult RDomainWidget::pickFace(int x, int y)
     result.kind = "face";
     result.id = hit_face;
     result.measure = static_cast<double>(mh.fcara(hit_face));
+    result.point = hit_point;
     result.centroid = QVector3D(
         static_cast<float>(mh.fccnd(hit_face, 0)),
         static_cast<float>(mh.fccnd(hit_face, 1)),
@@ -2123,6 +2175,7 @@ void RDomainWidget::initialize(QRhiCommandBuffer *)
         m_scene.releaseAll();
         m_gizmo.release();
         m_scalar_bar.release();
+        m_labels.release();
         m_rhi = rhi();
         m_rpdesc = rpdesc;
         m_sample_count = sampleCount();
@@ -2161,6 +2214,14 @@ void RDomainWidget::render(QRhiCommandBuffer * cb)
         m_rhi, rpdesc, sampleCount(), pixel_size, camera_forward, m_scene.camera().up(), batch);
     m_scalar_bar.update(m_rhi, rpdesc, sampleCount(), pixel_size, batch);
     m_title.update(m_rhi, rpdesc, sampleCount(), pixel_size, batch);
+    m_labels.update(
+        m_rhi,
+        rpdesc,
+        sampleCount(),
+        pixel_size,
+        static_cast<float>(devicePixelRatioF()),
+        m_scene.viewProjection(pixel_size, nullptr),
+        batch);
 
     QColor const clear_color = m_transparent_capture
                                    ? QColor::fromRgbF(1.0f, 1.0f, 1.0f, 0.0f)
@@ -2174,6 +2235,7 @@ void RDomainWidget::render(QRhiCommandBuffer * cb)
     {
         drawable->draw(cb);
     }
+    m_labels.draw(cb);
     m_gizmo.draw(cb);
     m_scalar_bar.draw(cb);
     m_title.draw(cb);
@@ -2186,6 +2248,7 @@ void RDomainWidget::releaseResources()
     m_gizmo.release();
     m_scalar_bar.release();
     m_title.release();
+    m_labels.release();
     m_rhi = nullptr;
     m_rpdesc = nullptr;
     m_sample_count = 0;

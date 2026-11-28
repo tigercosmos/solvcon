@@ -21,11 +21,13 @@ from ._pilot_core import (  # noqa: F401
 __getattr__, __dir__ = lazy_exports(__name__, {
     '_pilot_core': [
         'mgr', 'RDomainWidget', 'R2DWidget', 'Overlay2dOptions',
-        'CellQualityMetric',
-        'RPythonConsoleDockWidget', 'RPythonTerminalDockWidget', 'RManager',
+        'CellQualityMetric', 'RManager',
         'PlotLimits2d', 'PlotColor', 'RPlotSeries', 'RPlotDecimator',
         'RPlotModel', 'RPlotTicker', 'plot_color_cycle', 'plot_cycle_color'],
-    '_style': ['RuleCatalog', 'Shades'],
+    '_style': ['AppInk', 'AppRules', 'DATA', 'FILL_MIX', 'GRAPHIC_CONTRAST',
+               'HOVER_MIX', 'Ink', 'PaletteStyle', 'RuleCatalog',
+               'SMALL_PX', 'Shades', 'TINT_MIX', 'legible',
+               'number_font', 'set_style_property'],
     'base': ['controller', 'launch', 'register_app'],
 })[1:]
 

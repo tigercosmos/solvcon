@@ -17,6 +17,17 @@ namespace
 // Vertical field of view used for the 3D perspective projection.
 constexpr float FOV_DEGREES = 45.0f;
 
+// Room left around a 2D box that fills the viewport, as a factor of its size.
+constexpr float FILL_MARGIN = 1.05f;
+
+// The near plane follows the eye-to-pivot distance so a close-up is not
+// clipped. It is capped at 1% of the scene radius, which keeps the normal
+// framing as it is, and floored at a fraction of the far plane, which bounds
+// the far/near ratio so the depth buffer keeps usable precision.
+constexpr float NEAR_PER_DISTANCE = 0.005f;
+constexpr float NEAR_PER_RADIUS_MAX = 0.01f;
+constexpr float NEAR_PER_FAR_MIN = 1.0e-6f;
+
 } /* end namespace */
 
 void RScene::addDrawable(std::unique_ptr<RDrawable> drawable)
@@ -223,6 +234,11 @@ QMatrix4x4 RScene::viewProjection(QSize pixel_size, QRhi * rhi) const
         distance = 2.0f * radius;
     }
 
+    float const far_plane = distance + 3.0f * radius;
+    float const near_plane = std::max(
+        std::min(NEAR_PER_DISTANCE * distance, NEAR_PER_RADIUS_MAX * radius),
+        NEAR_PER_FAR_MIN * far_plane);
+
     bool const use_perspective =
         (Projection::Perspective == m_projection) ||
         (Projection::Auto == m_projection && 3 == m_ndim);
@@ -230,24 +246,37 @@ QMatrix4x4 RScene::viewProjection(QSize pixel_size, QRhi * rhi) const
     QMatrix4x4 proj;
     if (use_perspective)
     {
-        proj.perspective(FOV_DEGREES, aspect, 0.01f * radius, distance + 3.0f * radius);
+        proj.perspective(FOV_DEGREES, aspect, near_plane, far_plane);
     }
     else
     {
-        // The orthographic box is sized around the bounding sphere for the
-        // viewport aspect, scaled by the camera's zoom factor.
-        float const margin = radius * 1.1f * m_camera.orthoScale();
-        float half_w = margin;
-        float half_h = margin;
-        if (aspect >= 1.0f)
+        // A 2D box fills the viewport along its tighter side, so a long thin
+        // domain is not shrunk to the circle around it.  Otherwise the
+        // orthographic box is sized around the bounding sphere.  Either is
+        // scaled by the camera's zoom factor.
+        QVector2D const box = m_camera.fitHalfExtent();
+        float half_w = 0.0f;
+        float half_h = 0.0f;
+        if (2 == m_ndim && box.x() > 0.0f && box.y() > 0.0f)
         {
-            half_w = margin * aspect;
+            half_h = std::max(box.y(), box.x() / aspect) * FILL_MARGIN * m_camera.orthoScale();
+            half_w = half_h * aspect;
         }
         else
         {
-            half_h = margin / aspect;
+            float const margin = radius * 1.1f * m_camera.orthoScale();
+            half_w = margin;
+            half_h = margin;
+            if (aspect >= 1.0f)
+            {
+                half_w = margin * aspect;
+            }
+            else
+            {
+                half_h = margin / aspect;
+            }
         }
-        proj.ortho(-half_w, half_w, -half_h, half_h, 0.01f * radius, distance + 3.0f * radius);
+        proj.ortho(-half_w, half_w, -half_h, half_h, near_plane, far_plane);
     }
 
     return clip * proj * view;

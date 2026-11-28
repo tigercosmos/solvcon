@@ -48,102 +48,6 @@ class PilotRequireTC(unittest.TestCase):
         self.assertIs(cm.exception.__cause__, cause)
 
 
-class PythonConsoleBackendTC(unittest.TestCase):
-    """
-    The persistent read-eval-print backend behind the pilot console.
-
-    These drive ``solvcon.apputil`` and ``solvcon.system`` directly, so
-    they run headlessly and do not need the Qt pilot to be built.
-    """
-
-    def setUp(self):
-        from solvcon.apputil import AppEnvironment
-        self.env = AppEnvironment("test_{}".format(id(self)))
-
-    def _run(self, source):
-        """Run source in the test environment, capturing stdout and stderr."""
-        import io
-        from contextlib import redirect_stdout, redirect_stderr
-        out, err = io.StringIO(), io.StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
-            more = self.env.run_code(source)
-        return more, out.getvalue(), err.getvalue()
-
-    def test_pycon(self):
-        # A bare expression auto-displays and binds to _, the way a
-        # read-eval-print loop behaves, rather than printing nothing.
-        import builtins
-        more, out, err = self._run('21 + 21')
-        self.assertFalse(more)
-        self.assertEqual(out.strip(), '42')
-        self.assertEqual(builtins._, 42)
-        _, out, err = self._run('_ + 8')
-        self.assertEqual(out.strip(), '50')
-
-    def test_assignment_is_silent(self):
-        more, out, err = self._run('answer = 42')
-        self.assertFalse(more)
-        self.assertEqual(out, '')
-        _, out, err = self._run('answer')
-        self.assertEqual(out.strip(), '42')
-
-    def test_multiline_reports_more_then_runs(self):
-        import io
-        from contextlib import redirect_stdout
-        self.assertTrue(self.env.console.push('for i in range(3):'))
-        self.assertTrue(self.env.console.push('    print(i)'))
-        out = io.StringIO()
-        with redirect_stdout(out):
-            self.assertFalse(self.env.console.push(''))
-        self.assertEqual(out.getvalue(), '0\n1\n2\n')
-
-    def test_push_line_drives_interactive_multiline(self):
-        # push_line feeds one line at a time and reports whether the
-        # statement is still open, without closing it on the caller's behalf,
-        # so a terminal can show a continuation prompt.
-        import io
-        from contextlib import redirect_stdout
-        # A complete statement closes at once.
-        self.assertFalse(self.env.push_line('total = 0'))
-        # An open block stays open until a blank line closes it.
-        self.assertTrue(self.env.push_line('for i in range(3):'))
-        self.assertTrue(self.env.push_line('    total += i'))
-        self.assertFalse(self.env.push_line(''))
-        out = io.StringIO()
-        with redirect_stdout(out):
-            self.assertFalse(self.env.push_line('total'))
-        self.assertEqual(out.getvalue().strip(), '3')
-
-    def test_exception_reports_user_traceback(self):
-        _, out, err = self._run('raise ValueError("boom")')
-        self.assertIn('ValueError: boom', err)
-        self.assertIn('File "<console>"', err)
-        # The host call stack must not leak into the user-facing report.
-        self.assertNotIn('apputil', err)
-
-    def test_syntax_error_reports_offending_line(self):
-        _, out, err = self._run('def bad(:')
-        self.assertIn('SyntaxError', err)
-        self.assertIn('bad(', err)
-
-    def test_exit_does_not_kill_process(self):
-        # exit()/quit() raises SystemExit; the console swallows it so the
-        # embedded interpreter that hosts the pilot keeps running.
-        more, out, err = self._run('raise SystemExit(2)')
-        self.assertFalse(more)
-
-    def test_exec_code_entry_point_drives_the_console(self):
-        # The C++ widget calls solvcon.system.exec_code; it must feed the
-        # same persistent interpreter and auto-display the result.
-        import io
-        from contextlib import redirect_stdout
-        from solvcon import system
-        out = io.StringIO()
-        with redirect_stdout(out):
-            system.exec_code('6 * 7')
-        self.assertEqual(out.getvalue().strip(), '42')
-
-
 class _FakeViewer:
     """A stand-in for a 3D viewer widget."""
 
@@ -210,6 +114,15 @@ class PilotNamespaceTC(unittest.TestCase):
         self.assertIn('show_mesh(m)', banner)
         self.assertIn('load_mesh(name)', banner)
 
+    def test_help_lists_every_name_in_scope(self):
+        from solvcon import apputil
+        banner = apputil.install_pilot_namespace(self.mgr, self.env)
+        listed = {line.split()[0].split('(')[0]
+                  for line in banner.splitlines()[1:]}
+        in_scope = {k for k in self.env.globals if not k.startswith('__')}
+        # A name the help leaves out is one a user cannot find.
+        self.assertEqual(listed, in_scope)
+
     def test_extra_handles_join_the_curated_ones(self):
         from solvcon import apputil
         probe = object()
@@ -235,18 +148,22 @@ class PilotNamespaceTC(unittest.TestCase):
         self.assertEqual(viewer.boundaries, list(range(mh.nbcs)))
         self.assertEqual(self.env.globals['viewers'](), [viewer])
         self.assertEqual(self.env.globals['meshes'](), [mh])
+        # An empty title asks the viewer for its default one.
+        self.assertEqual(viewer.windowTitle, "")
+        viewer = self.env.globals['show_mesh'](mh, title="my mesh")
+        self.assertEqual(viewer.windowTitle, "my mesh")
 
     def test_refresher_tracks_the_current_viewer(self):
         from solvcon import apputil
         apputil.install_pilot_namespace(self.mgr, self.env)
-        # No viewer is open yet, so a command leaves the handles empty.
-        self.env.run_code('pass')
+        # No viewer is open yet, so a refresh leaves the handles empty.
+        self.env.refresh_namespace()
         self.assertIsNone(self.env.globals['viewer'])
-        # Opening a viewer must be reflected on the next command, not stay
+        # Opening a viewer must be reflected on the next refresh, not stay
         # stale at the value captured when the namespace was seeded.
         sentinel = object()
         self.mgr.add3DWidget().updateMesh(sentinel)
-        self.env.run_code('pass')
+        self.env.refresh_namespace()
         self.assertIs(self.env.globals['mesh'], sentinel)
 
     @testing.requires_pilot
@@ -265,6 +182,7 @@ class PilotNamespaceTC(unittest.TestCase):
         # A real StaticMesh is built and opened in a fresh viewer.
         self.assertEqual(viewer.mesh.ndim, 3)
         self.assertTrue(viewer.axis)
+        self.assertEqual(viewer.windowTitle, "Sample: tetrahedron")
         self.assertEqual(self.env.globals['viewers'](), [viewer])
 
     @testing.requires_pilot
@@ -292,60 +210,6 @@ class HousekeepingTC(unittest.TestCase):
         self.assertIn(name, apputil.environ)
         apputil.stop_code(env)
         self.assertNotIn(name, apputil.environ)
-
-
-class CallTipTC(unittest.TestCase):
-    """
-    The call tip that the console shows when a ``(`` is typed.
-
-    Driven through solvcon.apputil directly, so it runs headlessly.
-    """
-
-    def setUp(self):
-        from solvcon.apputil import AppEnvironment
-        self.env = AppEnvironment("tip_{}".format(id(self)))
-
-    def test_builtin_signature_and_docstring(self):
-        from solvcon import apputil
-        tip = apputil.get_call_tip('range')
-        self.assertTrue(tip.startswith('range('))
-        self.assertIn('range', tip)
-
-    def test_seeded_callable_signature_and_first_paragraph(self):
-        from solvcon import apputil
-
-        def greet(name, count=1):
-            """Say hello to someone.
-
-            This second paragraph must not appear in the tip.
-            """
-            return name
-
-        self.env.seed(greet=greet)
-        tip = apputil.get_call_tip('greet')
-        self.assertIn('greet(name, count=1)', tip)
-        self.assertIn('Say hello to someone.', tip)
-        self.assertNotIn('second paragraph', tip)
-
-    def test_non_callable_returns_empty(self):
-        from solvcon import apputil
-        self.env.seed(value=42)
-        self.assertEqual(apputil.get_call_tip('value'), '')
-
-    def test_unknown_name_returns_empty(self):
-        from solvcon import apputil
-        self.assertEqual(apputil.get_call_tip('does_not_exist'), '')
-
-    def test_call_expression_is_not_evaluated(self):
-        from solvcon import apputil
-
-        def boom():
-            raise AssertionError("the call tip must not invoke the callable")
-
-        self.env.seed(boom=boom)
-        # 'boom()' is not a bare identifier chain, so it is rejected before
-        # any evaluation and boom is never called.
-        self.assertEqual(apputil.get_call_tip('boom()'), '')
 
 
 class PythonCommandTC(unittest.TestCase):

@@ -20,7 +20,6 @@ if _pcore.enable:
     from .. import canvas
     from .. import painter as _painter
     from .. import track
-    from .. import agent
     from . import _capture
     from . import _theme
     from . import _ui_state
@@ -66,6 +65,54 @@ class _Singleton(type):
         return cls._instances[cls]
 
 
+class _AppLoader(object):
+    """Stand for one app on the console shelf until :meth:`load` opens it.
+
+    Reading the loader opens nothing, so the completer, which reads every
+    attribute it lists, may list the apps.
+
+    :param controller: The controller the app registered with.
+    :param name: The name it registered as.
+    """
+
+    def __init__(self, controller, name):
+        self._controller = controller
+        #: The name the app registered as.
+        self.name = name
+
+    def __repr__(self):
+        return f"<app {self.name!r}, which load() opens>"
+
+    def load(self):
+        """Open the app, as its menu item does, and return it."""
+        app = self._controller.apps[self.name]
+        app.open()
+        return app
+
+
+class _AppShelf(object):
+    """The apps by name for the console: ``apps.obsrefl`` is the
+    :class:`_AppLoader` of the app registered as ``obsrefl``.
+
+    :param controller: The controller whose apps the shelf holds.
+    """
+
+    def __init__(self, controller):
+        self._controller = controller
+
+    def __dir__(self):
+        return sorted(self._controller.apps)
+
+    def __repr__(self):
+        return f"apps: {', '.join(dir(self))}"
+
+    def __getattr__(self, name):
+        if name in self._controller.apps:
+            return _AppLoader(self._controller, name)
+        raise AttributeError(f"no app named {name!r}; the apps are "
+                             f"{', '.join(dir(self))}")
+
+
 class _Controller(metaclass=_Singleton):
     def __init__(self):
         # Do not construct any Qt member objects before calling launch(), or
@@ -76,8 +123,10 @@ class _Controller(metaclass=_Singleton):
         self.gmsh_dialog = None
         self.svg_dialog = None
         self.tree_panel = None
+        self.app_config = None
         self.apps = {}
         self._app_factories = {}
+        self.app_shelf = _AppShelf(self)
         self.sample_mesh = None
         self.mesh_style_status = None
         self.painter = None
@@ -87,7 +136,7 @@ class _Controller(metaclass=_Singleton):
         self.runprofiling = None
         self.benchmark = None
         self.mcap_panel = None
-        self.agent = None
+        self.console_panel = None
         self.theme_menu = None
         self.window_manager = None
         self.capture = None
@@ -107,8 +156,9 @@ class _Controller(metaclass=_Singleton):
 
         ``factory(controller)`` returns a feature with ``populate_menu()``.
         It runs in build(), or right away when the pilot is already built,
-        and the feature lands in ``apps[name]``.  A name taken twice raises
-        :class:`ValueError` rather than placing a second set of menu entries.
+        and the feature lands in ``apps[name]`` and on :attr:`app_shelf`.  A
+        name taken twice raises :class:`ValueError` rather than placing a
+        second set of menu entries.
         """
         if name in self._app_factories:
             raise ValueError("app {!r} is already registered".format(name))
@@ -125,10 +175,19 @@ class _Controller(metaclass=_Singleton):
         app.populate_menu()
         self.apps[name] = app
 
+    def console_handles(self):
+        """The console's app shelf with its banner lines."""
+        handles = {'apps': self.app_shelf}
+        entries = [
+            ('apps.<name>.load()', 'open an app and return it; Tab completes'),
+        ]
+        return handles, entries
+
     def launch(self, name="pilot", size=(1000, 600)):
         self.build(name=name, size=size)
         self._rmgr.show()
-        return self._rmgr.exec()
+        with _gui_common.interrupt_exits():
+            return self._rmgr.exec()
 
     def build(self, name="pilot", size=(1000, 600)):
         """Assemble the window, features, and menu bar without the event
@@ -162,13 +221,15 @@ class _Controller(metaclass=_Singleton):
         self.openprofiledata = panel.Profiling(mgr=self._rmgr)
         self.runprofiling = panel.RunProfiling(mgr=self._rmgr)
         self.mcap_panel = track.McapPanel(mgr=self._rmgr)
-        self.agent = agent.AgentPanel(mgr=self._rmgr)
+        self.console_panel = panel.ConsolePanel(mgr=self._rmgr)
         self.theme_menu = _theme.ThemeMenu(mgr=self._rmgr)
         self.window_manager = panel.WindowManager(mgr=self._rmgr)
         self.capture = _capture.ScreenCapture(mgr=self._rmgr)
         self.capture_widget = panel.CaptureWidget(
             mgr=self._rmgr, capture=self.capture)
+        self.app_config = panel.AppConfig(mgr=self._rmgr)
         self.ui_state = _ui_state.UiState(mgr=self._rmgr)
+        self.dock_chrome = panel.DockChrome(mgr=self._rmgr)
         self.populate_menu()
         self._start_apps()
         self._seed_console_namespace()
@@ -176,16 +237,16 @@ class _Controller(metaclass=_Singleton):
         return self._rmgr
 
     def _seed_console_namespace(self):
-        """Curate the console namespace and greet both consoles with a banner.
-
-        The two consoles share one interpreter, so the terminal opens with
-        the same handles-in-scope banner the two-pane console prints.
-        """
-        appenv = apputil.get_current_appenv()
-        banner = apputil.install_pilot_namespace(
-            self._rmgr, appenv, extra=self.capture.console_handles())
-        self._rmgr.pycon.writeToHistory(banner)
-        self._rmgr.pyterm.writeToHistory(banner)
+        """Curate the interpreter's namespace and tell the user how to list
+        what it puts in scope."""
+        handles, entries = self.console_handles()
+        capture = self.capture.console_handles()
+        handles.update(capture[0])
+        entries.extend(capture[1])
+        apputil.install_pilot_namespace(
+            self._rmgr, apputil.get_current_appenv(),
+            extra=(handles, entries))
+        _gui_common.write_message(apputil.PILOT_CONSOLE_NOTE)
 
     def _open_benchmark(self):
         if self.benchmark is None:
@@ -218,12 +279,12 @@ class _Controller(metaclass=_Singleton):
         self.openprofiledata.populate_menu()
         self.runprofiling.populate_menu()
         self.mcap_panel.populate_menu()
-        self.agent.populate_menu()
+        self.console_panel.populate_menu()
         self.theme_menu.populate_menu()
         self.window_manager.populate_menu()
         self.capture.populate_menu()
         self.capture_widget.populate_menu()
-        self.agent.bind_auto_open()  # need to be the last to bind all commands
+        self.app_config.populate_menu()
 
         close = _gui_common.build_action(
             wm.mainWindow, "Close",
@@ -239,20 +300,6 @@ class _Controller(metaclass=_Singleton):
                 wm.mainWindow, "Exit", "Exit the application",
                 lambda: wm.quit(), id="file.exit"),
             100)
-        wm.menu_model.place(
-            "View/Panels",
-            _gui_common.build_action(
-                wm.mainWindow, "Console", "Open / Close Console",
-                wm.toggleConsole, id="window.console",
-                checkable=True, checked=True),
-            30)
-        wm.menu_model.place(
-            "View/Panels",
-            _gui_common.build_action(
-                wm.mainWindow, "Terminal", "Open / Close Terminal",
-                wm.toggleTerminal, id="window.terminal",
-                checkable=True, checked=False),
-            35)
         wm.menu_model.place(
             "Profiling",
             _gui_common.build_action(

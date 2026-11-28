@@ -10,9 +10,9 @@ enters horizontally from the left, the top boundary holds the state behind
 an incident oblique shock, the bottom slip wall reflects that shock, and the
 flow leaves through the non-reflective outflow on the right.
 
-The driver, the analysis, and the session carry the problem itself and import
-without the pilot, so a script or a no-Qt build runs and judges the
-reflection without the GUI that rides behind the pilot toggle.
+The driver, the setup, the session, the analysis, the view model, and the
+presenter import without Qt, so a script runs, judges, and reads out the
+reflection without the GUI.
 """
 
 from ... import pilot
@@ -20,10 +20,18 @@ from ... import pilot
 __all__, __getattr__, __dir__ = pilot.lazy_exports(__name__, {
     '_analytic': ['Reflection'],
     '_app': ['ObsreflApp'],
+    '_column': ['ControlColumn'],
+    '_control': ['ReflectionController'],
     '_driver': ['ObliqueShock', 'ObliqueShockRelation'],
-    '_panel': ['SolutionPanel'],
+    '_figure': ['ReflectionFigure'],
+    '_presenter': ['ReflectionPresenter'],
+    '_probe': ['Probe', 'ProbeReading'],
     '_session': ['ReflectionSession'],
-}, ungated=('_analytic', '_driver', '_session'))
+    '_setup': ['ReflectionSetup', 'max_deflection'],
+    '_viewmodel': ['Display', 'FIELD_LABELS'],
+    '_window': ['ReflectionWindow'],
+}, ungated=('_analytic', '_driver', '_presenter', '_probe', '_session',
+            '_setup', '_viewmodel'))
 
 if pilot.enable:
     from . import _app

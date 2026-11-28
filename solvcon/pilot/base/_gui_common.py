@@ -1,10 +1,51 @@
 # Copyright (c) 2025, solvcon team <contact@solvcon.net>
 # BSD 3-Clause License, see COPYING
 
+import contextlib
+import signal
 
 from .. import _pilot_core as _pcore
+from ._detach import SubWindowDetacher
 from ...core import Toggle
 from PySide6 import QtCore, QtGui
+
+
+# Milliseconds between the wake-ups that let the SIGINT handler run.
+INTERRUPT_INTERVAL = 200
+
+
+@contextlib.contextmanager
+def interrupt_exits(stop=QtCore.QCoreApplication.exit,
+                    interval=INTERRUPT_INTERVAL):
+    """Let Ctrl-C end the Qt event loop run inside the block.
+
+    Python runs a signal handler only between bytecodes, and an idle Qt loop
+    runs none, so a timer wakes the interpreter every ``interval``
+    milliseconds to let the handler fire. The handler queues
+    ``stop(128 + SIGINT)``, the status a shell expects of a program stopped
+    by Ctrl-C. It queues rather than calls, because the default stop runs
+    the ``aboutToQuit`` hooks at once, and the handler may interrupt any
+    callback. Ctrl-C during a console command also stops the command, and
+    the loop ends when it returns.
+
+    :param stop: Callable that ends the loop with a status. The default,
+        :meth:`QCoreApplication.exit`, leaves the thread unable to run
+        another event loop until the application loop starts again.
+    :param interval: Milliseconds between wake-ups, the longest Ctrl-C
+        waits for the handler while the loop idles.
+    """
+    def _handle(signum, frame):
+        QtCore.QTimer.singleShot(0, lambda: stop(128 + signum))
+
+    previous = signal.signal(signal.SIGINT, _handle)
+    timer = QtCore.QTimer()
+    timer.timeout.connect(lambda: None)
+    timer.start(interval)
+    try:
+        yield
+    finally:
+        timer.stop()
+        signal.signal(signal.SIGINT, previous)
 
 
 def apply_label_mode(overlay, on, advanced, coordinates):
@@ -21,6 +62,34 @@ def label_switch_and_mode(overlay):
     """Return ``(on, advanced, coordinates)`` for an overlay's label state."""
     on = overlay.shape_ids or overlay.advanced_labels
     return on, overlay.advanced_labels, overlay.coordinate_labels
+
+
+_message_sink = None
+_pending_messages = []
+
+
+def write_message(text):
+    """Show ``text`` to the user in the pilot's command transcript.
+
+    A message written before the transcript exists waits for it, so what a
+    feature reports while the pilot starts is not lost.
+    """
+    if _message_sink is None:
+        _pending_messages.append(text)
+    else:
+        _message_sink(text)
+
+
+def set_message_sink(sink):
+    """Send every message to ``sink``, starting with the ones waiting for
+    it.  ``None`` holds the messages again."""
+    global _message_sink
+    _message_sink = sink
+    if sink is not None:
+        pending = list(_pending_messages)
+        del _pending_messages[:]
+        for text in pending:
+            sink(text)
 
 
 class ToggleActionBridge(QtCore.QObject):
@@ -87,6 +156,62 @@ class SubWindowCloseFilter(QtCore.QObject):
         if event.type() == QtCore.QEvent.Type.Close:
             self._on_close()
         return False
+
+
+def keep_filling(subwindow, area):
+    """Keep ``subwindow`` filling ``area`` when the area takes it out of
+    maximized.
+
+    The area keeps one sub-window maximized: bringing another to the front
+    puts the maximized one back to its normal size, which for a window
+    opened maximized is the small size it was added with.  The window
+    then fills the area instead, at its size of the moment.  A restore of
+    the window in front, which is the user's, keeps its normal size.
+
+    :param subwindow: The ``QMdiSubWindow`` to keep.
+    :param area: The ``QMdiArea`` holding it, from the manager.
+    """
+    def fill():
+        state = subwindow.windowState()
+        if (not state & (QtCore.Qt.WindowMaximized
+                         | QtCore.Qt.WindowMinimized)
+                and area.activeSubWindow() is not subwindow):
+            subwindow.setGeometry(area.viewport().rect())
+
+    def on_state(old, new):
+        # The area takes the window out of maximized while it is still in
+        # front, and brings the other forward right after; who is in front
+        # then tells the two moves apart.
+        if (old & QtCore.Qt.WindowMaximized
+                and not new & QtCore.Qt.WindowMaximized):
+            QtCore.QTimer.singleShot(0, subwindow, fill)
+    subwindow.windowStateChanged.connect(on_state)
+
+
+def setup_app_subwindow(subwindow, mgr, app_config):
+    """Give the sub-window of an app what every app window has: the size
+    grip, a detacher that moves it out of the main window and back, the
+    fill of the area when another window comes to the front, and its
+    config shown when it comes to the front out of the area.
+
+    :param subwindow: The ``QMdiSubWindow`` the manager added for the app.
+    :param mgr: The ``RManager`` holding it.
+    :param app_config: The ``AppConfigPanel`` the app's column is in.
+    :return: The :class:`SubWindowDetacher` of the sub-window.
+    """
+    mgr.addSubWindowGrip(subwindow)
+    detacher = SubWindowDetacher(subwindow, mgr)
+    keep_filling(subwindow, mgr.mdiArea)
+    strip = getattr(subwindow.widget(), 'strip', None)
+    if _pcore.chrome_enabled() and strip is not None:
+        # The bar of the sub-window carries the problem in full. A window
+        # of its own has a native title a grab leaves out, so the strip
+        # says the problem there.
+        strip.show_problem(False)
+        detacher.moved.connect(strip.show_problem)
+    # The detacher goes with the sub-window, and so does this connection.
+    detacher.activated.connect(lambda: app_config.show_for(subwindow))
+    return detacher
 
 
 _SHORTCUT_CONTEXTS = {
@@ -193,12 +318,9 @@ class PilotFeature(QtCore.QObject):
                 "'mgr' must be an instance of 'solvcon.pilot.RManager'")
         super(PilotFeature, self).__init__(*args, **kw)
 
-    @property
-    def _pycon(self):
-        """
-        :rtype: solvcon.pilot.RPythonConsoleDockWidget
-        """
-        return self._mgr.pycon
+    @staticmethod
+    def _write_message(text):
+        write_message(text)
 
     @property
     def _mainWindow(self):

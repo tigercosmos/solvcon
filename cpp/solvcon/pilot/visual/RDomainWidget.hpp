@@ -19,6 +19,7 @@
 #include <solvcon/pilot/visual/RColormap.hpp>
 #include <solvcon/pilot/visual/RScalarBar.hpp>
 #include <solvcon/pilot/visual/RScene.hpp>
+#include <solvcon/pilot/canvas/RLabelOverlay.hpp>
 #include <solvcon/pilot/canvas/RTextOverlay.hpp>
 #include <solvcon/pilot/visual/RDrawable.hpp>
 
@@ -122,10 +123,31 @@ public:
         float tz,
         float sx,
         float sy,
-        float sz);
+        float sz,
+        float yaw = 0.0f);
     void setObjectVisible(std::string const & name, bool visible);
     void setObjectOpacity(std::string const & name, float opacity);
+    void setObjectColor(std::string const & name, float r, float g, float b, float a);
     std::vector<std::string> objectNames() const;
+
+    /**
+     * Anchor the text label @p name at the world point (@p x, @p y, @p z),
+     * drawn at a fixed pixel size and shifted by (@p dx, @p dy) logical pixels
+     * (x right, y down). Re-adding a name replaces the label.
+     */
+    void addLabel(
+        std::string const & name,
+        std::string const & text,
+        float x,
+        float y,
+        float z,
+        float dx = 8.0f,
+        float dy = 0.0f);
+    void removeLabel(std::string const & name);
+    void clearLabels();
+    void showLabels(bool show);
+    bool labelsShown() const { return m_labels.isVisible(); }
+    std::vector<std::string> labelNames() const { return m_labels.names(); }
 
     /// Show or hide the mesh, in whatever representation is active.
     void showMesh(bool show);
@@ -194,7 +216,9 @@ public:
 
     /// The result of a pick: the entity kind ("cell", "node", "face", or
     /// "none" for a miss), its id, its element type (for a cell), a measure
-    /// (cell volume or face area), and its centroid.
+    /// (cell volume or face area), its centroid, and the point the pick
+    /// landed on: where the ray met the surface (or the z = 0 plane of a 2D
+    /// mesh) for a cell or a face, and the node itself for a node.
     struct PickResult
     {
         std::string kind = "none";
@@ -202,6 +226,7 @@ public:
         int type = -1;
         double measure = 0.0;
         QVector3D centroid;
+        QVector3D point;
 
         bool hit() const { return "none" != kind; }
     }; /* end struct PickResult */
@@ -445,12 +470,14 @@ private:
     {
         RDrawable * drawable = nullptr;
         std::shared_ptr<StaticMesh> mesh;
+        bool placed = false; ///< Whether a transform has framed it once.
     }; /* end struct ObjectEntry */
     std::map<std::string, ObjectEntry> m_objects;
     std::vector<float> m_ticks_x; ///< Cube-axes tick coordinates per axis.
     std::vector<float> m_ticks_y;
     std::vector<float> m_ticks_z;
     RTextOverlay m_title; ///< The figure-title overlay.
+    RLabelOverlay m_labels; ///< The world-anchored text labels.
     bool m_has_selection = false;
     std::string m_selection_kind = "none";
     int m_selection_id = -1;

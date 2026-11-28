@@ -25,7 +25,6 @@ except ImportError:
     QTest = None
 
 _PANEL_CHORDS = (
-    ("panel.agent_console", ["Ctrl+Shift+A"]),
     ("panel.inspector", ["Ctrl+Shift+I"]),
     ("panel.painter", ["Ctrl+Shift+P"]),
 )
@@ -88,9 +87,9 @@ class ShortcutTC(unittest.TestCase):
         self._assert_action_matches_resolved(
             "camera.reset", QtCore.Qt.WidgetShortcut)
 
-    def test_console_action_carries_the_resolved_binding(self):
+    def test_console_panel_action_carries_the_resolved_binding(self):
         self._assert_action_matches_resolved(
-            "window.console", QtCore.Qt.WindowShortcut)
+            "panel.console", QtCore.Qt.WindowShortcut)
 
     def test_panel_actions_carry_the_resolved_bindings(self):
         for oid, _ in _PANEL_CHORDS:
@@ -196,9 +195,9 @@ class ApplyShortcutHelperTC(unittest.TestCase):
 
     def test_applies_a_known_command_to_a_fresh_action(self):
         act = QtGui.QAction("Console", self.mgr.mainWindow)
-        act.setObjectName("window.console")
+        act.setObjectName("panel.console")
         _gui_common.apply_shortcut(act, mgr=self.mgr)
-        resolved = self.mgr.resolve_shortcut("window.console")
+        resolved = self.mgr.resolve_shortcut("panel.console")
         self.assertEqual(_live_sequences(act), resolved["sequences"])
         self.assertEqual(act.shortcutContext(), QtCore.Qt.WindowShortcut)
 

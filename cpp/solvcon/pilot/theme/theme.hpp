@@ -116,30 +116,6 @@ struct ThemePalette
 }; /* end struct ThemePalette */
 
 /**
- * @brief The colors the console's Python highlighter, its matching-bracket
- * marker, and its captured error output draw with.
- *
- * These are not QPalette roles, so they live apart from ThemePalette; the
- * console reads them directly. Like the palette they come in a light and a
- * dark table so the highlighted code stays legible under either variant, which
- * the hardcoded single set could not do once the console followed the theme.
- * bracket_match is a background wash behind a matched pair of brackets, and
- * error is the foreground the terminal paints captured stderr with, kept a
- * distinct red in each variant. Ordinary stdout takes the palette text color
- * rather than a field here.
- */
-struct SyntaxColors
-{
-    ThemeColor keyword;
-    ThemeColor builtin;
-    ThemeColor string;
-    ThemeColor comment;
-    ThemeColor number;
-    ThemeColor bracket_match;
-    ThemeColor error;
-}; /* end struct SyntaxColors */
-
-/**
  * @brief The colors the 2D canvas paints its own surface with.
  *
  * The canvas fills every pixel itself rather than letting the style paint a
@@ -199,15 +175,6 @@ ThemePalette const & darkThemePalette();
 
 /// The palette a platform draws a resolved variant with.
 ThemePalette const & themePaletteFor(PlatformId platform, ThemeVariant variant);
-
-/// The console syntax colors tuned for a light background.
-SyntaxColors const & lightSyntaxColors();
-
-/// The console syntax colors tuned for a dark background.
-SyntaxColors const & darkSyntaxColors();
-
-/// The syntax colors a platform draws a resolved variant with.
-SyntaxColors const & syntaxColorsFor(PlatformId platform, ThemeVariant variant);
 
 /// The canvas colors for a white drawing surface.
 Canvas2dPalette const & lightCanvas2dPalette();

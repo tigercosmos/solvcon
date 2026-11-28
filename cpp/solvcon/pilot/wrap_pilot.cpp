@@ -141,6 +141,7 @@ static pybind11::object pick_to_py(RDomainWidget::PickResult const & r)
     d["type"] = r.type;
     d["measure"] = r.measure;
     d["centroid"] = py::make_tuple(r.centroid.x(), r.centroid.y(), r.centroid.z());
+    d["point"] = py::make_tuple(r.point.x(), r.point.y(), r.point.z());
     return d;
 }
 
@@ -221,6 +222,18 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapRDomainWidget
                 py::arg("h"))
             .def_property_readonly("mesh", &wrapped_type::mesh)
             .def("updateMesh", &wrapped_type::updateMesh, py::arg("mesh"))
+            .def_property(
+                "windowTitle",
+                [](wrapped_type const & self)
+                {
+                    return self.windowTitle().toStdString();
+                },
+                [](wrapped_type & self, std::string const & title)
+                {
+                    self.setWindowTitle(QString::fromStdString(title));
+                },
+                "Title of the sub-window showing the viewer; an empty string "
+                "gives the default title.")
             .def(
                 "addObject",
                 &wrapped_type::addObject,
@@ -237,7 +250,8 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapRDomainWidget
                 py::arg("sx") = 1.0f,
                 py::arg("sy") = 1.0f,
                 py::arg("sz") = 1.0f,
-                "Set a named object's translate and scale model transform.")
+                py::arg("yaw") = 0.0f,
+                "Set a named object's model transform: translate, then yaw about z in radians, then scale.")
             .def(
                 "setObjectVisible",
                 &wrapped_type::setObjectVisible,
@@ -248,7 +262,32 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapRDomainWidget
                 &wrapped_type::setObjectOpacity,
                 py::arg("name"),
                 py::arg("opacity"))
+            .def(
+                "setObjectColor",
+                &wrapped_type::setObjectColor,
+                py::arg("name"),
+                py::arg("r"),
+                py::arg("g"),
+                py::arg("b"),
+                py::arg("a") = 1.0f,
+                "Set a named object's flat color; the opacity still scales the alpha.")
             .def("objectNames", &wrapped_type::objectNames)
+            .def(
+                "addLabel",
+                &wrapped_type::addLabel,
+                py::arg("name"),
+                py::arg("text"),
+                py::arg("x"),
+                py::arg("y"),
+                py::arg("z"),
+                py::arg("dx") = 8.0f,
+                py::arg("dy") = 0.0f,
+                "Anchor a fixed-size text label at a world point, shifted by (dx, dy) pixels; a name is replaced.")
+            .def("removeLabel", &wrapped_type::removeLabel, py::arg("name"))
+            .def("clearLabels", &wrapped_type::clearLabels)
+            .def("showLabels", &wrapped_type::showLabels, py::arg("show"))
+            .def_property_readonly("labelsShown", &wrapped_type::labelsShown)
+            .def("labelNames", &wrapped_type::labelNames)
             .def("showMesh", &wrapped_type::showMesh, py::arg("show"))
             .def("setMeshOpacity", &wrapped_type::setMeshOpacity, py::arg("opacity"))
             .def("setFieldOpacity", &wrapped_type::setFieldOpacity, py::arg("opacity"))
@@ -330,7 +369,7 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapRDomainWidget
                 py::arg("x"),
                 py::arg("y"),
                 "Pick the cell under the pixel; a dict with id, type, measure, "
-                "and centroid, or None on a miss.")
+                "centroid, and the point the ray hit, or None on a miss.")
             .def(
                 "pickNode",
                 [](wrapped_type & self, int x, int y)
@@ -796,94 +835,6 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapR2DWidget
 
 }; /* end class WrapR2DWidget */
 
-class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapRPythonConsoleDockWidget
-    : public WrapBase<WrapRPythonConsoleDockWidget, RPythonConsoleDockWidget>
-{
-
-    friend root_base_type;
-
-    WrapRPythonConsoleDockWidget(pybind11::module & mod, char const * pyname, char const * pydoc)
-        : root_base_type(mod, pyname, pydoc)
-    {
-
-        namespace py = pybind11;
-
-        (*this)
-            .def("writeToHistory", &wrapped_type::writeToHistory)
-            .def_property(
-                "command",
-                [](wrapped_type const & self)
-                {
-                    return self.command().toStdString();
-                },
-                [](wrapped_type & self, std::string const & command)
-                {
-                    return self.setCommand(QString::fromStdString(command));
-                })
-            .def_property(
-                "python_redirect",
-                [](wrapped_type const & self)
-                {
-                    return self.hasPythonRedirect();
-                },
-                [](wrapped_type & self, bool enabled)
-                {
-                    self.setPythonRedirect(enabled);
-                })
-            //
-            ;
-    }
-
-}; /* end class WrapRPythonConsoleDockWidget */
-
-class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapRPythonTerminalDockWidget
-    : public WrapBase<WrapRPythonTerminalDockWidget, RPythonTerminalDockWidget>
-{
-
-    friend root_base_type;
-
-    WrapRPythonTerminalDockWidget(pybind11::module & mod, char const * pyname, char const * pydoc)
-        : root_base_type(mod, pyname, pydoc)
-    {
-
-        namespace py = pybind11;
-
-        (*this)
-            .def("writeToHistory", &wrapped_type::writeToHistory)
-            .def("executeCommand", &wrapped_type::executeCommand)
-            .def("resetInput", &wrapped_type::resetInput)
-            .def_property_readonly(
-                "textEdit",
-                [](wrapped_type & self)
-                {
-                    return self.textEdit();
-                })
-            .def_property(
-                "command",
-                [](wrapped_type const & self)
-                {
-                    return self.command().toStdString();
-                },
-                [](wrapped_type & self, std::string const & command)
-                {
-                    return self.setCommand(QString::fromStdString(command));
-                })
-            .def_property(
-                "python_redirect",
-                [](wrapped_type const & self)
-                {
-                    return self.hasPythonRedirect();
-                },
-                [](wrapped_type & self, bool enabled)
-                {
-                    self.setPythonRedirect(enabled);
-                })
-            //
-            ;
-    }
-
-}; /* end class WrapRPythonTerminalDockWidget */
-
 class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapRMenuModel
     : public WrapBase<WrapRMenuModel, RMenuModel>
 {
@@ -1019,18 +970,6 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapRManager
         namespace py = pybind11;
 
         (*this)
-            .def_property_readonly(
-                "pycon",
-                [](wrapped_type & self)
-                {
-                    return self.pycon();
-                })
-            .def_property_readonly(
-                "pyterm",
-                [](wrapped_type & self)
-                {
-                    return self.pyterm();
-                })
             .def(
                 "add3DWidget",
                 [](wrapped_type & self)
@@ -1074,18 +1013,6 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapRManager
                 [](wrapped_type & self)
                 {
                     return self.mdiArea();
-                })
-            .def(
-                "toggleConsole",
-                [](wrapped_type & self)
-                {
-                    return self.toggleConsole();
-                })
-            .def(
-                "toggleTerminal",
-                [](wrapped_type & self)
-                {
-                    return self.toggleTerminal();
                 })
             //
             ;
@@ -1356,8 +1283,6 @@ void wrap_pilot(pybind11::module & mod)
         .def_readwrite("advanced_labels", &Overlay2dOptions::advanced_labels)
         .def_readwrite("highlight_id", &Overlay2dOptions::highlight_id);
     WrapR2DWidget::commit(mod, "R2DWidget", "R2DWidget");
-    WrapRPythonConsoleDockWidget::commit(mod, "RPythonConsoleDockWidget", "RPythonConsoleDockWidget");
-    WrapRPythonTerminalDockWidget::commit(mod, "RPythonTerminalDockWidget", "RPythonTerminalDockWidget");
     WrapRMenuModel::commit(
         mod,
         "RMenuModel",
@@ -1365,6 +1290,7 @@ void wrap_pilot(pybind11::module & mod)
         "path with menu(path, weight); a smaller weight sits earlier and a "
         "negative weight appends. clear() empties the bar.");
     wrap_thread_manager(mod);
+    wrap_chrome(mod);
     WrapRManager::commit(mod, "RManager", "RManager");
     WrapRManagerProxy::commit(mod, "RManagerProxy", "RManagerProxy");
 

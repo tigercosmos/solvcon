@@ -24,6 +24,7 @@
 #include <Qt>
 
 #include <solvcon/pilot/app/RAction.hpp>
+#include <solvcon/pilot/app/RChromeStyle.hpp>
 #include <solvcon/pilot/app/RMenuModel.hpp>
 #include <solvcon/pilot/app/RShortcutManager.hpp>
 #include <solvcon/pilot/app/RThreadManager.hpp>
@@ -152,8 +153,6 @@ RManager & RManager::setUp()
         // Paint the style and palette for widgets to follow.
         this->m_themeManager->setWindow(m_mainWindow);
         this->m_themeManager->apply();
-        this->setUpConsole();
-        this->setUpTerminal();
         this->setUpCentral();
         this->primeRhiComposition();
         this->setUpMenu();
@@ -200,8 +199,6 @@ void RManager::reset()
     m_core = nullptr;
     m_mainWindow = nullptr;
     m_menuModel = nullptr;
-    m_pycon = nullptr;
-    m_pyterm = nullptr;
     m_mdiArea = nullptr;
     m_rhi_primer = nullptr;
 }
@@ -239,11 +236,21 @@ RDomainWidget * RManager::add3DWidget()
         // plain container widget, which composites correctly and lets several
         // viewers coexist.
         auto * host = new QWidget;
-        host->setWindowTitle("Domain viewer");
         auto * layout = new QVBoxLayout(host);
         layout->setContentsMargins(0, 0, 0, 0);
         viewer = new RDomainWidget(/*parent*/ host);
         layout->addWidget(viewer);
+        // The sub-window shows the title of the host, so the host follows the
+        // title set on the viewer. An empty title gives the default title.
+        QObject::connect(
+            viewer,
+            &QWidget::windowTitleChanged,
+            host,
+            [host](QString const & title)
+            {
+                host->setWindowTitle(title.isEmpty() ? QStringLiteral("Domain viewer") : title);
+            });
+        host->setWindowTitle(QStringLiteral("Domain viewer"));
         // Associate the Escape reset shortcut with this viewer; a
         // Qt::WidgetShortcut fires only while a widget it was added to has
         // focus. The hidden RHI primer is created elsewhere and never reaches
@@ -437,75 +444,13 @@ void RManager::redoCanvas() const
     canvas->requestRepaint();
 }
 
-void RManager::toggleConsole()
-{
-    if (m_pycon)
-    {
-        if (m_pycon->isVisible())
-        {
-            m_pycon->hide();
-        }
-        else
-        {
-            m_pycon->show();
-        }
-    }
-}
-
-void RManager::setUpConsole()
-{
-    m_pycon = new RPythonConsoleDockWidget(QString("Console"), m_mainWindow);
-    m_pycon->setAllowedAreas(Qt::AllDockWidgetAreas);
-    m_mainWindow->addDockWidget(Qt::BottomDockWidgetArea, m_pycon);
-
-    auto applyConsoleTheme = [this](ThemeVariant variant)
-    {
-        m_pycon->applyTheme(syntaxColorsFor(m_themeManager->platform(), variant));
-    };
-    applyConsoleTheme(m_themeManager->currentVariant());
-    QObject::connect(m_themeManager, &RThemeManager::themeChanged, m_pycon, applyConsoleTheme);
-}
-
-void RManager::toggleTerminal()
-{
-    if (m_pyterm)
-    {
-        if (m_pyterm->isVisible())
-        {
-            m_pyterm->hide();
-        }
-        else
-        {
-            m_pyterm->show();
-        }
-    }
-}
-
-void RManager::setUpTerminal()
-{
-    m_pyterm = new RPythonTerminalDockWidget(QString("Terminal"), m_mainWindow);
-    m_pyterm->setAllowedAreas(Qt::AllDockWidgetAreas);
-    m_mainWindow->addDockWidget(Qt::BottomDockWidgetArea, m_pyterm);
-
-    // The two consoles share the bottom area as tabs, with the two-pane
-    // console shown first; the terminal is opened from the View menu.
-    m_mainWindow->tabifyDockWidget(m_pycon, m_pyterm);
-    m_pyterm->hide();
-
-    auto applyTerminalTheme = [this](ThemeVariant variant)
-    {
-        m_pyterm->applyTheme(syntaxColorsFor(m_themeManager->platform(), variant));
-    };
-    applyTerminalTheme(m_themeManager->currentVariant());
-    QObject::connect(m_themeManager, &RThemeManager::themeChanged, m_pyterm, applyTerminalTheme);
-}
-
 void RManager::setUpCentral()
 {
     m_mdiArea = new QMdiArea(m_mainWindow);
     m_mdiArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_mdiArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_mainWindow->setCentralWidget(m_mdiArea);
+    install_chrome(m_mdiArea);
     // Keep the focused 2D canvas in step with the active draw tool, so the
     // single Painter toolbox always drives whichever canvas has focus.
     QObject::connect(m_mdiArea, &QMdiArea::subWindowActivated, m_mdiArea, [this](QMdiSubWindow *)

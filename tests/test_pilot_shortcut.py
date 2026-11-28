@@ -19,7 +19,6 @@ _KEYMOD_PRIMARY = 1
 _KEY_Z = 17
 
 _PANEL_CHORDS = (
-    ("panel.agent_console", ["Ctrl+Shift+A"]),
     ("panel.inspector", ["Ctrl+Shift+I"]),
     ("panel.painter", ["Ctrl+Shift+P"]),
 )
@@ -77,8 +76,8 @@ class ShortcutResolutionTC(unittest.TestCase):
         self.assertEqual(r["role"], "none")
         self.assertEqual(r["sequences"], ["Esc"])
 
-    def test_console_resolves_to_the_grave_toggle(self):
-        r = self.mgr.resolve_shortcut("window.console")
+    def test_console_panel_resolves_to_the_grave_toggle(self):
+        r = self.mgr.resolve_shortcut("panel.console")
         self.assertTrue(r["known"])
         self.assertTrue(r["bound"])
         self.assertFalse(r["standard"])
@@ -175,8 +174,8 @@ class ShortcutResolutionTC(unittest.TestCase):
     def test_primary_modifier_native_text_follows_platform(self):
         # Qt PortableText spells the command modifier as Ctrl everywhere;
         # NativeText carries the Command glyph on macOS.
-        r = self.mgr.resolve_shortcut("panel.agent_console")
-        self.assertEqual(r["sequences"], ["Ctrl+Shift+A"])
+        r = self.mgr.resolve_shortcut("panel.inspector")
+        self.assertEqual(r["sequences"], ["Ctrl+Shift+I"])
         native = QtGui.QKeySequence(
             r["sequences"][0], QtGui.QKeySequence.PortableText)
         native_text = native.toString(QtGui.QKeySequence.NativeText)
@@ -186,11 +185,11 @@ class ShortcutResolutionTC(unittest.TestCase):
             self.assertIn("Ctrl", native_text)
 
     def test_resolved_checker_reports_curated_undo_clash(self):
-        # Rebind Console to Primary+Z; the resolved checker must see Undo.
+        # Rebind the Console panel to Primary+Z; the checker must see Undo.
         conflicts = self.mgr.shortcut_conflicts_rebinding(
-            "window.console", _KEYMOD_PRIMARY, _KEY_Z)
+            "panel.console", _KEYMOD_PRIMARY, _KEY_Z)
         pairs = {frozenset(pair) for pair in conflicts}
-        self.assertIn(frozenset({"edit.undo", "window.console"}), pairs)
+        self.assertIn(frozenset({"edit.undo", "panel.console"}), pairs)
 
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:
